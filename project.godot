@@ -11,8 +11,13 @@ config_version=5
 [application]
 
 config/name="EXTRACT"
+run/main_scene="res://scenes/main_menu.tscn"
 config/features=PackedStringArray("4.6", "GL Compatibility")
 config/icon="res://icon.svg"
+
+[autoload]
+
+Game="*res://scripts/game.gd"
 
 [dotnet]
 
@@ -20,10 +25,10 @@ project/assembly_name="ExtractionRPG"
 
 [physics]
 
-3d/physics_engine="Jolt Physics"
+common/physics_interpolation=true
 
 [rendering]
 
-rendering_device/driver.windows="d3d12"
 renderer/rendering_method="gl_compatibility"
 renderer/rendering_method.mobile="gl_compatibility"
+environment/defaults/default_clear_color=Color(0, 0, 0, 1)

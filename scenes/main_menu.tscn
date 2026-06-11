@@ -1,0 +1,44 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/main_menu.gd" id="1_menu"]
+
+[node name="MainMenu" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+script = ExtResource("1_menu")
+
+[node name="Center" type="CenterContainer" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+
+[node name="Column" type="VBoxContainer" parent="Center"]
+custom_minimum_size = Vector2(340, 0)
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="Title" type="Label" parent="Center/Column"]
+layout_mode = 2
+text = "EXTRACT — walking skeleton"
+horizontal_alignment = 1
+
+[node name="HostButton" type="Button" parent="Center/Column"]
+layout_mode = 2
+text = "Host"
+
+[node name="IpEdit" type="LineEdit" parent="Center/Column"]
+layout_mode = 2
+placeholder_text = "127.0.0.1"
+
+[node name="JoinButton" type="Button" parent="Center/Column"]
+layout_mode = 2
+text = "Join"
+
+[node name="Status" type="Label" parent="Center/Column"]
+layout_mode = 2
+text = "Host in one window, Join in the other."
+horizontal_alignment = 1
+autowrap_mode = 2
