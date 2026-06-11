@@ -7,19 +7,19 @@ extends CharacterBody2D
 
 enum State { IDLE, CHASE, WINDUP, RECOVER, DEAD }
 
-@export var max_health: int = 60
+@export var max_health: int = 150
 @export var move_speed: float = 130.0
-@export var aggro_range: float = 500.0  # < camera half-width: no off-screen aggro, ever
+@export var aggro_range: float = 320.0  # < camera half-HEIGHT (324): no off-screen aggro, ever
 @export var slam_range: float = 150.0
 @export var slam_radius: float = 95.0
-@export var slam_damage: int = 35
-@export var slam_windup: float = 1.0
-@export var slam_recover: float = 0.7
+@export var slam_damage: int = 70
+@export var slam_windup: float = 0.66
+@export var slam_recover: float = 0.55
 @export var slam_cooldown: float = 2.0
 @export var respawn_delay: float = 6.0
 
 var _state: State = State.IDLE
-var _health: int = 60
+var _health: int = 150
 var _home := Vector2.ZERO
 var _target_id: int = 0
 var _slam_center := Vector2.ZERO

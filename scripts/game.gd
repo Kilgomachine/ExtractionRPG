@@ -17,12 +17,16 @@ const EDGE_FADE_DEG: float = 14.0
 ## lives on this always-present autoload so the broadcast can never miss.
 var ready_peers: PackedInt32Array = PackedInt32Array()
 
+## Headless-harness flag: pawn walks at Brute1 firing, to exercise combat in CI.
+var auto_walk: bool = false
+
 var _cone_texture: ImageTexture
 var _glow_texture: ImageTexture
 
 
 func _ready() -> void:
 	_register_input_actions()
+	auto_walk = "--auto-walk" in OS.get_cmdline_user_args()
 
 
 func host() -> Error:
@@ -102,6 +106,7 @@ func _register_input_actions() -> void:
 	_add_key_action(&"move_left", KEY_A)
 	_add_key_action(&"move_right", KEY_D)
 	_add_key_action(&"dodge", KEY_SPACE)
+	_add_key_action(&"interact", KEY_E)
 	_add_mouse_action(&"fire", MOUSE_BUTTON_LEFT)
 
 

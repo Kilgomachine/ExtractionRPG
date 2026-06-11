@@ -1,52 +1,60 @@
-[gd_scene load_steps=2 format=3]
+[gd_scene format=3 uid="uid://bc5uljv0mt04u"]
 
-[ext_resource type="Script" path="res://scripts/main_menu.gd" id="1_menu"]
+[ext_resource type="Script" uid="uid://1q4rvik6h4jj" path="res://scripts/main_menu.gd" id="1_menu"]
 
-[node name="MainMenu" type="Control"]
+[node name="MainMenu" type="Control" unique_id=1090840025]
 layout_mode = 3
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
 script = ExtResource("1_menu")
 
-[node name="Center" type="CenterContainer" parent="."]
+[node name="Center" type="CenterContainer" parent="." unique_id=1850705116]
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
+offset_left = -50.0
+offset_top = -169.0
+offset_right = -50.0
+offset_bottom = -169.0
+grow_horizontal = 2
+grow_vertical = 2
 
-[node name="Column" type="VBoxContainer" parent="Center"]
+[node name="Column" type="VBoxContainer" parent="Center" unique_id=209149965]
 custom_minimum_size = Vector2(340, 0)
 layout_mode = 2
 theme_override_constants/separation = 12
 
-[node name="Title" type="Label" parent="Center/Column"]
+[node name="Title" type="Label" parent="Center/Column" unique_id=1387705239]
 layout_mode = 2
 text = "EXTRACT — walking skeleton"
 horizontal_alignment = 1
 
-[node name="SteamLabel" type="Label" parent="Center/Column"]
+[node name="SteamLabel" type="Label" parent="Center/Column" unique_id=1462383237]
 layout_mode = 2
 text = "Steam: …"
 horizontal_alignment = 1
 
-[node name="HostSteamButton" type="Button" parent="Center/Column"]
+[node name="HostSteamButton" type="Button" parent="Center/Column" unique_id=2085389764]
 layout_mode = 2
 text = "Host (Steam) — friends join from the friends list"
 
-[node name="HostButton" type="Button" parent="Center/Column"]
+[node name="HostButton" type="Button" parent="Center/Column" unique_id=1969267764]
 layout_mode = 2
 text = "Host (Local)"
 
-[node name="IpEdit" type="LineEdit" parent="Center/Column"]
+[node name="IpEdit" type="LineEdit" parent="Center/Column" unique_id=1676983086]
 layout_mode = 2
 placeholder_text = "127.0.0.1"
 
-[node name="JoinButton" type="Button" parent="Center/Column"]
+[node name="JoinButton" type="Button" parent="Center/Column" unique_id=1700737548]
 layout_mode = 2
 text = "Join (Local)"
 
-[node name="Status" type="Label" parent="Center/Column"]
+[node name="Status" type="Label" parent="Center/Column" unique_id=1423009422]
 layout_mode = 2
 text = "Steam for friends · Local for testing on this PC."
 horizontal_alignment = 1

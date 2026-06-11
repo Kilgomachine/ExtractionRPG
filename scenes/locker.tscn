@@ -1,0 +1,18 @@
+[gd_scene load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/locker.gd" id="1_locker"]
+
+[sub_resource type="RectangleShape2D" id="RectangleShape2D_l"]
+size = Vector2(26, 18)
+
+[node name="Locker" type="StaticBody2D"]
+z_index = 5
+script = ExtResource("1_locker")
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="."]
+shape = SubResource("RectangleShape2D_l")
+
+[node name="Body" type="Polygon2D" parent="."]
+z_index = -9
+polygon = PackedVector2Array(-13, -9, 13, -9, 13, 9, -13, 9)
+color = Color(0.62, 0.46, 0.26, 1)

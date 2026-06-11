@@ -13,8 +13,9 @@ const SPAWN_GRACE: float = 2.0  # post-respawn invulnerability vs spawn camping
 # Lag grace: a remote pawn's dodge registers on the host ~RTT late, so the host
 # credits the full i-frame window from the flag's rise edge plus this margin.
 const REMOTE_DODGE_GRACE_MS: int = 120
+# All spots verified > enemy aggro/engage ranges (or wall-occluded) — keep it that way.
 const SPAWN_SPOTS: Array[Vector2] = [
-	Vector2(0, -40), Vector2(100, 0), Vector2(-100, 0), Vector2(0, -120),
+	Vector2(0, -40), Vector2(-40, 80), Vector2(-100, 0), Vector2(0, -120),
 ]
 
 @export var move_speed: float = 230.0
@@ -56,6 +57,7 @@ func _enter_tree() -> void:
 
 
 func _ready() -> void:
+	add_to_group(&"players")
 	_vision_cone.texture = Game.cone_texture()
 	_glow.texture = Game.glow_texture()
 	position = SPAWN_SPOTS[spawn_slot % SPAWN_SPOTS.size()]
@@ -78,6 +80,7 @@ func _physics_process(delta: float) -> void:
 		var input: Dictionary = _gather_input()
 		_apply_movement(input, delta)
 		_handle_fire(input, delta)
+		_handle_interact(input)
 		_apply_dodge_visual(_dodge_time_left > 0.0)
 		# Only stream to peers whose world is loaded (host-owned ready list).
 		var my_id: int = multiplayer.get_unique_id()
@@ -144,11 +147,24 @@ func respawn_to_slot() -> void:
 
 
 func _gather_input() -> Dictionary:
+	if Game.auto_walk:
+		# Headless harness: march at Brute1's post, guns blazing.
+		var to_brute: Vector2 = Vector2(380, -160) - global_position
+		return {
+			"move": to_brute.normalized() if to_brute.length() > 60.0 else Vector2.ZERO,
+			"aim": to_brute,
+			"dodge": false,
+			"fire": true,
+			"fire_pressed": false,
+			"interact": false,
+		}
 	return {
 		"move": Input.get_vector(&"move_left", &"move_right", &"move_up", &"move_down"),
 		"aim": get_global_mouse_position() - global_position,
 		"dodge": Input.is_action_just_pressed(&"dodge"),
 		"fire": Input.is_action_pressed(&"fire"),
+		"fire_pressed": Input.is_action_just_pressed(&"fire"),
+		"interact": Input.is_action_just_pressed(&"interact"),
 	}
 
 
@@ -174,7 +190,19 @@ func _apply_movement(input: Dictionary, delta: float) -> void:
 
 func _handle_fire(input: Dictionary, delta: float) -> void:
 	_fire_cooldown_left = maxf(0.0, _fire_cooldown_left - delta)
-	if not input["fire"] or _fire_cooldown_left > 0.0 or _world == null:
+	if not input["fire"] or _world == null:
+		return
+	# A fresh click on nearby ground loot is a PICKUP, not a shot.
+	if input["fire_pressed"]:
+		var item: LootItem = _hovered_loot_in_range()
+		if item != null:
+			if multiplayer.is_server():
+				_world.host_request_pickup(1, item.loot_id)
+			else:
+				_world._request_pickup.rpc_id(1, item.loot_id)
+			_fire_cooldown_left = maxf(_fire_cooldown_left, 0.15)
+			return
+	if _fire_cooldown_left > 0.0:
 		return
 	var aim: Vector2 = input["aim"]
 	if aim.length_squared() < 4.0:
@@ -185,6 +213,39 @@ func _handle_fire(input: Dictionary, delta: float) -> void:
 		_world.host_handle_fire(1, direction)
 	else:
 		_world._request_fire.rpc_id(1, direction)
+
+
+func _handle_interact(input: Dictionary) -> void:
+	if not input["interact"] or _world == null:
+		return
+	var nearest: Locker = null
+	var nearest_dist: float = Locker.SEARCH_RANGE
+	for node: Node in get_tree().get_nodes_in_group(&"lockers"):
+		var locker := node as Locker
+		if locker == null or not locker.can_search():
+			continue
+		var dist: float = locker.global_position.distance_to(global_position)
+		if dist <= nearest_dist:
+			nearest_dist = dist
+			nearest = locker
+	if nearest == null:
+		return
+	if multiplayer.is_server():
+		nearest.host_request_search(1)
+	else:
+		nearest._request_search.rpc_id(1)
+
+
+func _hovered_loot_in_range() -> LootItem:
+	var mouse: Vector2 = get_global_mouse_position()
+	for node: Node in get_tree().get_nodes_in_group(&"loot"):
+		var item := node as LootItem
+		if item == null:
+			continue
+		if mouse.distance_to(item.global_position) <= LootItem.HOVER_RADIUS \
+				and item.global_position.distance_to(global_position) <= LootItem.PICKUP_RANGE:
+			return item
+	return null
 
 
 func _apply_dodge_visual(active: bool) -> void:
