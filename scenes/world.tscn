@@ -1,6 +1,7 @@
-[gd_scene load_steps=2 format=3]
+[gd_scene load_steps=3 format=3]
 
 [ext_resource type="Script" path="res://scripts/world.gd" id="1_world"]
+[ext_resource type="PackedScene" path="res://scenes/enemy.tscn" id="2_enemy"]
 
 [node name="World" type="Node2D"]
 script = ExtResource("1_world")
@@ -10,11 +11,21 @@ color = Color(0.16, 0.16, 0.19, 1)
 
 [node name="Players" type="Node2D" parent="."]
 
+[node name="Enemies" type="Node2D" parent="."]
+
+[node name="Brute1" parent="Enemies" instance=ExtResource("2_enemy")]
+position = Vector2(380, -160)
+
+[node name="Brute2" parent="Enemies" instance=ExtResource("2_enemy")]
+position = Vector2(-430, 380)
+
+[node name="Projectiles" type="Node2D" parent="."]
+
 [node name="Hud" type="CanvasLayer" parent="."]
 
 [node name="Help" type="Label" parent="Hud"]
 offset_left = 14.0
 offset_top = 10.0
-offset_right = 720.0
+offset_right = 900.0
 offset_bottom = 36.0
-text = "WASD move · mouse aim · SPACE dodge · F1 invite friends (Steam) · ESC leave"
+text = "WASD move · mouse aim · LMB shoot · SPACE dodge (i-frames!) · F1 invite (Steam) · ESC leave"

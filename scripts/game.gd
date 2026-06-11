@@ -102,6 +102,7 @@ func _register_input_actions() -> void:
 	_add_key_action(&"move_left", KEY_A)
 	_add_key_action(&"move_right", KEY_D)
 	_add_key_action(&"dodge", KEY_SPACE)
+	_add_mouse_action(&"fire", MOUSE_BUTTON_LEFT)
 
 
 func _add_key_action(action: StringName, key: Key) -> void:
@@ -110,4 +111,13 @@ func _add_key_action(action: StringName, key: Key) -> void:
 	InputMap.add_action(action)
 	var event := InputEventKey.new()
 	event.physical_keycode = key
+	InputMap.action_add_event(action, event)
+
+
+func _add_mouse_action(action: StringName, button: MouseButton) -> void:
+	if InputMap.has_action(action):
+		return
+	InputMap.add_action(action)
+	var event := InputEventMouseButton.new()
+	event.button_index = button
 	InputMap.action_add_event(action, event)
