@@ -41,12 +41,9 @@ everything multiplayer-aware realistically lands at 20–30 — the cap is the p
       `createLobby(FRIENDS_ONLY)` → `allowP2PPacketRelay(true)` → `host_with_lobby()`; client `join_requested`
       → `joinLobby()` → `connect_to_lobby()`; `+connect_lobby` cmdline parsed; F1 = overlay invite dialog.
       Steam init verified live (status 0, real Steam ID).
-- [ ] **The real-world test:** friend on their own PC/account joins via Steam invite. Test on **exported builds**
-      (steam_api64.dll + GDExtension libs beside the exe; overlay invites are unreliable from the editor).
-      Logistics: needs a second Steam account + second machine/VM — that's the real cost of this week.
+- [x] **The real-world test:** ✅ friend joined via Steam from their own PC (2026-06-11/12) — exported build worked.
 
-**Exit / GATE:** a friend on their own PC joins via Steam friends-list "Join Game"; two sprites move in sync.
-*"Co-op is proven."* If Steam misbehaves → fallback ladder (community peer forks → noray relay) decided NOW, in week 2.
+**Exit / GATE:** ✅ PASSED — *"Co-op is proven."* The riskiest unknown in the whole roadmap is dead.
 
 ## Phase 1 — Control + THE VISION CONE  ·  ~1.5–2 weeks  ← VALIDATES THE 2D PIVOT
 - [ ] WASD + mouse aim, free-rotation sprite (body/weapon layers), dodge roll on cooldown. Client-owned, synced via Synchronizer.
@@ -60,13 +57,19 @@ everything multiplayer-aware realistically lands at 20–30 — the cap is the p
 **Exit / GATE:** sneaking around a greybox map with the cone feels *tense and readable*, solo and with a friend.
 *"The cone is the game."* If it disappoints, the 2D pivot's premise needs re-examination — better in week 3 than week 13.
 
-## Phase 2 — Combat  ·  ~2–3 weeks  ← VALIDATES THE CORE BET
-- [ ] Health + **armor-tier chunking** (ZS model: blocked ≈15%, unblocked 100%; ammo-vs-armor sets block chance). Host resolves all damage.
-- [ ] 1 ranged weapon: host-simulated projectile, falloff, TTK ~1.5–3s open-field (slightly long, for revive windows).
-- [ ] 1 active ability (smoke OR dash) + heal consumable. Cover = occluders block sight AND shots.
-- [ ] **Downed state**: interact-revive by a friend; solo = downed becomes dead.
-- [ ] **HARD RULE in code: AI/damage cannot engage beyond (camera view + aim-extend).** No off-screen deaths, ever.
-- [ ] Hit feedback: flashes, numbers, screenshake (cheap, Godot tween-friendly).
+## Phase 2 — Combat  ·  ~2–3 weeks  ← VALIDATES THE CORE BET  ·  IN PROGRESS
+**Combat test slice shipped 2026-06-12** (ahead of the phase-1 cone polish, by request): host-owned hp +
+floating bars, LMB host-simulated projectile, dodge **i-frames** (+120ms lag grace for clients, cleared
+across death), telegraphed **Brute** enemy (locked red-circle slam, 1s windup, leashes home), death →
+3s respawn with 2s spawn-grace, hit flashes.
+- [x] Health host-resolved + bars + hit feedback (armor-tier chunking still TODO)
+- [x] 1 ranged weapon: host-simulated projectile (falloff TODO; TTK tuning pending playtest)
+- [x] **HARD RULE in code:** Brute aggro 500px < camera half-width — no off-screen engagement, ever
+- [x] Dodge i-frames (was an explicit ask — done with remote-fairness grace)
+- [ ] Armor-tier chunking (ZS model: blocked ≈15%, unblocked 100%)
+- [ ] 1 active ability (smoke OR dash) + heal consumable
+- [ ] **Downed state**: interact-revive by a friend (currently: plain death + timed respawn)
+- [ ] Damage numbers + screenshake
 
 **Exit / GATE:** a duel against a dummy/simple bot is tense, readable, winnable when shot first. *"Combat is fun."*
 
