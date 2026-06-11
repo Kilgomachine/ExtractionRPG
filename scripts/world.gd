@@ -52,6 +52,9 @@ func _ready() -> void:
 func _unhandled_input(event: InputEvent) -> void:
 	if event.is_action_pressed(&"ui_cancel"):
 		_leave_to_menu()
+	elif event is InputEventKey and event.pressed and not event.echo \
+			and (event as InputEventKey).physical_keycode == KEY_F1:
+		SteamLobby.invite_friends()
 
 
 func _draw() -> void:

@@ -47,6 +47,7 @@ func join(address: String) -> Error:
 
 func leave() -> void:
 	ready_peers = PackedInt32Array()
+	SteamLobby.on_session_left()
 	# Order matters: close() the old peer FIRST, then assign the fresh offline
 	# peer — set_multiplayer_peer rejects peers in DISCONNECTED state.
 	if multiplayer.multiplayer_peer != null:

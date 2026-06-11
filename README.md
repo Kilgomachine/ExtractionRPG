@@ -35,5 +35,17 @@ top-down + readable TTK makes extraction tension *fun* instead of frustrating.
 ## Getting started
 
 1. Install **Godot 4.6.3 (.NET build)** and open `project.godot`.
-2. Install the GodotSteam GDExtension (Asset Library id 2445) into `addons/`.
-3. Steam must be running; dev App ID 480 is configured for local testing.
+2. GodotSteam GDExtension is **bundled** in `addons/godotsteam/` — nothing to install.
+3. Steam must be running for Steam play; dev App ID 480 (SpaceWar) is passed in code.
+
+## Playing the walking skeleton
+
+- **Steam co-op:** *Host (Steam)* in the menu → in-raid press **F1** to invite friends
+  (or they right-click you in the Steam friends list → *Join Game*). Friends need the
+  game files (an exported build or this project) + Steam running.
+- **Local testing:** Debug ▸ Customize Run Instances → 2 instances → *Host (Local)* in
+  one window, *Join (Local)* in the other. (The Steam path can't be tested with two
+  instances on one PC — one Steam account = one identity.)
+- Controls: **WASD** move · **mouse** aim · **SPACE** dodge · **F1** invite · **ESC** leave.
+- Headless smoke test: `godot --headless --quit-after 4000 -- --auto-host` plus
+  a second instance with `--auto-join` (ENet localhost).

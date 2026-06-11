@@ -20,24 +20,29 @@ everything multiplayer-aware realistically lands at 20–30 — the cap is the p
 
 ---
 
-## Phase 0 — Setup  ·  ~3–4 days
+## Phase 0 — Setup  ·  ~3–4 days  ·  ✅ DONE 2026-06-11
 - [x] Godot 4.6.3 .NET installed; project created (relocated to `C:\GameDev\ExtractionRPG`, git initialized, renamed EXTRACT).
-- [ ] Open the project from the new location; delete the old OneDrive copy.
-- [ ] Project Settings: promote untyped GDScript warnings → errors.
-- [ ] Install **GodotSteam GDExtension v4.19.1-gde** from **Codeberg** (or Asset Library id 2445). GitHub org is archived — ignore it.
-- [ ] Record pins in README: Godot 4.6.3 .NET, GodotSteam 4.19.1, Steamworks SDK 1.64.
+- [x] Open the project from the new location.
+- [ ] Delete the old OneDrive copy (`OneDrive/Documents/Project/new-game-project`).
+- [x] Project Settings: untyped GDScript warnings promoted to errors (set in project.godot; addons excluded by default).
+- [x] **GodotSteam GDExtension v4.19.1-gde** installed from Codeberg, bundled in `addons/godotsteam/`.
+- [x] Pins recorded in README: Godot 4.6.3 .NET, GodotSteam 4.19.1, Steamworks SDK 1.64.
 - [ ] Watch **"Keeper to Keepers"** (GodotFest 2025, Chris Ridenour) — the production postmortem of this exact stack. Skim the **Skillet** example (GodotSteam org).
 
-**Exit:** project opens, GodotSteam loads (`steamInitEx()` status 0 with App ID 480). *"It runs."*
+**Exit:** ✅ project opens, GodotSteam loads — `steamInitEx()` returned status 0 with App ID 480. *"It runs."*
 
-## Phase 0.5 — Walking skeleton  ·  ~1–1.5 weeks  ← DO NOT SKIP
+## Phase 0.5 — Walking skeleton  ·  ~1–1.5 weeks  ← IN PROGRESS
 **Two-step ladder — never debug Godot MP concepts and Steam plumbing at the same time.**
-- [ ] **Days 1–3, ENet first:** MultiplayerSpawner + player scene + Synchronizer (position only), `@rpc` ping.
-      Test with editor **Debug ▸ Run Multiple Instances**. Get the *concepts* right with zero Steam variables.
-- [ ] **Then the Steam swap:** autoload (NON-pausable!) runs `steamInitEx()` + `Steam.run_callbacks()` per frame.
-      Host: `createLobby(FRIENDS_ONLY)` → `allowP2PPacketRelay(true)` → `SteamMultiplayerPeer.host_with_lobby()`.
-      Friend: `join_requested` → `joinLobby()` → `connect_to_lobby()`; parse `+connect_lobby` from cmdline for cold-start invites.
-- [ ] Test on **exported builds** (steam_api64.dll + GDExtension libs beside the exe; overlay invites are unreliable from the editor).
+- [x] **ENet first:** menu host/join, networked player (split authority, ready-peers gating), greybox map with
+      occluder walls + vision cone. Verified via Run Multiple Instances AND headless auto-host/auto-join harness.
+      (Implementation note: manual host-orchestrated spawn RPCs instead of MultiplayerSpawner — fits the
+      join-order slot assignment and lobby-locked future.)
+- [x] **The Steam swap (code):** `SteamLobby` autoload — `steamInitEx(480, embed_callbacks=true)`,
+      `createLobby(FRIENDS_ONLY)` → `allowP2PPacketRelay(true)` → `host_with_lobby()`; client `join_requested`
+      → `joinLobby()` → `connect_to_lobby()`; `+connect_lobby` cmdline parsed; F1 = overlay invite dialog.
+      Steam init verified live (status 0, real Steam ID).
+- [ ] **The real-world test:** friend on their own PC/account joins via Steam invite. Test on **exported builds**
+      (steam_api64.dll + GDExtension libs beside the exe; overlay invites are unreliable from the editor).
       Logistics: needs a second Steam account + second machine/VM — that's the real cost of this week.
 
 **Exit / GATE:** a friend on their own PC joins via Steam friends-list "Join Game"; two sprites move in sync.

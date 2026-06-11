@@ -25,9 +25,18 @@ layout_mode = 2
 text = "EXTRACT — walking skeleton"
 horizontal_alignment = 1
 
+[node name="SteamLabel" type="Label" parent="Center/Column"]
+layout_mode = 2
+text = "Steam: …"
+horizontal_alignment = 1
+
+[node name="HostSteamButton" type="Button" parent="Center/Column"]
+layout_mode = 2
+text = "Host (Steam) — friends join from the friends list"
+
 [node name="HostButton" type="Button" parent="Center/Column"]
 layout_mode = 2
-text = "Host"
+text = "Host (Local)"
 
 [node name="IpEdit" type="LineEdit" parent="Center/Column"]
 layout_mode = 2
@@ -35,10 +44,10 @@ placeholder_text = "127.0.0.1"
 
 [node name="JoinButton" type="Button" parent="Center/Column"]
 layout_mode = 2
-text = "Join"
+text = "Join (Local)"
 
 [node name="Status" type="Label" parent="Center/Column"]
 layout_mode = 2
-text = "Host in one window, Join in the other."
+text = "Steam for friends · Local for testing on this PC."
 horizontal_alignment = 1
 autowrap_mode = 2
