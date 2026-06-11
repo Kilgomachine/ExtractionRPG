@@ -4,7 +4,7 @@ Solo dev, part-time (~10–15 hrs/wk), some scripting background, first Godot pr
 **Honest timeline: 14–20 weeks part-time with the scope cap below. Uncapped, a first-timer building
 everything multiplayer-aware realistically lands at 20–30 — the cap is the plan, respect it.**
 
-> **HARD SCOPE CAP (the anti-explosion contract):** 1 map · 1–2 weapons · 2 raider archetypes ·
+> **HARD SCOPE CAP (the anti-explosion contract):** 1 map · 1–2 weapons · 2 bandit archetypes ·
 > slot-grid inventory (NOT Tetris) · no vendors/quests · minimal camp · lobby-locked raids (no join-in-progress).
 >
 > **Golden rules:**
@@ -65,7 +65,7 @@ everything multiplayer-aware realistically lands at 20–30 — the cap is the p
 
 **Exit / GATE:** a duel against a dummy/simple bot is tense, readable, winnable when shot first. *"Combat is fun."*
 
-## Phase 3 — AI raiders  ·  ~2 weeks
+## Phase 3 — Bandit AI  ·  ~2 weeks
 - [ ] NavigationRegion2D **baked** navmesh + NavigationAgent2D (node API only; RVO off or cosmetic). Host-side only.
 - [ ] State machine: Patrol → Investigate (heard/saw via detection cone — symmetrical vision) → Engage (uses cover) → Flee at low HP.
 - [ ] 2 archetypes (scout/heavy); loot on death; **mild player-count scaling: more enemies + aggression, never HP sponges.**
@@ -109,7 +109,7 @@ P0    ██ Setup                        3–4 d
 P0.5  █████ Walking skeleton        1–1.5 wk  ← GATE: Steam co-op works
 P1    ██████ Control + vision cone  1.5–2 wk  ← GATE: the cone is the game
 P2    ███████████ Combat              2–3 wk  ← GATE: combat is fun
-P3    ███████ AI raiders                2 wk
+P3    ███████ Bandit AI                 2 wk
 P4    ███████ Loot/inventory            2 wk
 P5    ███████ Extraction/death          2 wk  ← GATE: the loop grips
 P6    ███████ Camp/polish/playtest      2 wk

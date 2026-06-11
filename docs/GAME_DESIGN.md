@@ -28,7 +28,7 @@
 ## 2. The core loop (one raid, 15–25 min)
 
 ```
-CAMP (stash/loadout) → DEPLOY (1–3 friends) → RAID: loot + fight AI raiders → EXTRACT or DIE → CAMP
+CAMP (stash/loadout) → DEPLOY (1–3 friends) → RAID: loot + fight AI bandits → EXTRACT or DIE → CAMP
 ```
 - **Extract** = keep everything carried. **Die** = your corpse bag stays on the map; friends can recover your gear, or you can run back next raid (Duckov model).
 - **Secure pocket**: small, upgradeable container (keys/quest items/1 valuable) that survives death — the genre's
@@ -69,7 +69,7 @@ CAMP (stash/loadout) → DEPLOY (1–3 friends) → RAID: loot + fight AI raider
   Transport-agnostic: ENet for local dev, Steam for real sessions — zero gameplay-code change.
 - **SPLIT AUTHORITY** (not naive host-auth — Godot has no client prediction, so host-simulated movement would lag every keypress by a full RTT):
   - **Each client owns its own player's transform/aim/animation** (Synchronizer authority = that peer). Friend-trust accepted.
-  - **Host owns the world**: AI raiders, damage resolution, loot rolls, container contents, extraction timers.
+  - **Host owns the world**: AI bandits, damage resolution, loot rolls, container contents, extraction timers.
   - **Request → grant for all loot/equip/transfer**: client requests, host adjudicates, host broadcasts. Kills the two-players-grab-one-item dupe race.
 - **MultiplayerSynchronizer = transforms and simple primitives ONLY.** Inventory/loot/extraction state goes over explicit
   **reliable RPCs with serialized payloads (item IDs in PackedByteArray/JSON)** — engine limits are real: can't sync Objects/Textures,
@@ -108,7 +108,7 @@ CAMP (stash/loadout) → DEPLOY (1–3 friends) → RAID: loot + fight AI raider
 |---|---|
 | Vision cone doesn't feel good (it justifies the whole 2D pivot) | **Prototype it week 1–2** — it's the pivot's validation gate |
 | Steam transport sharp edges (disconnect crashes, rejoin timeouts reported) | ENet-first walking skeleton, then Steam swap; exported-build testing; fallback ladder: FishyFacepunch-equivalent → noray relay |
-| Scope explosion | HARD CAP: 1 map, 1–2 weapons, 2 raider archetypes, slot inventory, no vendors/quests, minimal camp. Vertical-slice gate ~wk 6–8 |
+| Scope explosion | HARD CAP: 1 map, 1–2 weapons, 2 bandit archetypes, slot inventory, no vendors/quests, minimal camp. Vertical-slice gate ~wk 6–8 |
 | First-timer learning Godot + Steamworks + netcode at once | GDScript-first (the tutorial ecosystem), two-step skeleton ladder, Skillet example + Dome Keeper "Keeper to Keepers" talk as references |
 | OneDrive | Project lives at `C:\GameDev\ExtractionRPG\` (done, git initialized). Docs stay in OneDrive |
 | ZS2 ships first | Differentiate: 2–3 player rescue intimacy, short raids, accessibility & humor (the Duckov lesson) |

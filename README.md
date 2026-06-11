@@ -1,6 +1,6 @@
 # EXTRACT (working title)
 
-A top-down **2D co-op extraction RPG** for 1–3 friends. Deploy into a raid, loot, fight AI raiders,
+A top-down **2D co-op extraction RPG** for 1–3 friends. Deploy into a raid, loot, fight AI bandits,
 and decide: push for more, or extract with what you've got. Die and your gear stays behind — but your
 friends can revive you, or carry your gear out and hand it back.
 
