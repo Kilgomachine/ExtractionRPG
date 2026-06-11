@@ -107,7 +107,11 @@ func _register_input_actions() -> void:
 	_add_key_action(&"move_right", KEY_D)
 	_add_key_action(&"dodge", KEY_SPACE)
 	_add_key_action(&"interact", KEY_E)
-	_add_key_action(&"quick_heal", KEY_1)
+	_add_key_action(&"slot_1", KEY_1)
+	_add_key_action(&"slot_2", KEY_2)
+	_add_key_action(&"slot_3", KEY_3)
+	_add_key_action(&"slot_4", KEY_4)
+	_add_key_action(&"reload", KEY_R)
 	_add_mouse_action(&"fire", MOUSE_BUTTON_LEFT)
 
 

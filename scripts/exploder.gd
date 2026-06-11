@@ -1,48 +1,44 @@
-class_name Igniter
+class_name Exploder
 extends CharacterBody2D
-## Fast bandit pyro. HOST-OWNED. Outruns players (330 vs 230) but must STOP
-## and visibly charge a cast bar before attacking — the rooted cast IS the
-## counterplay window. The cast sets the ground around it on fire (DoT zone);
-## dying sets it on fire too. LoS-gated visibility like all enemies.
+## Suicide sprinter. HOST-OWNED. Fastest thing on the map, dies to a single
+## hit — kill it before it reaches you. On contact it roots for a short fuse
+## (red circle telegraph, your last dodge window) then detonates for heavy
+## damage. Killing it during the fuse DEFUSES it. While charging, it streams
+## a "chasing" flag so every peer keeps it revealed and flaring — you always
+## see it coming.
 
-enum State { IDLE, CHASE, CAST, RECOVER, DEAD }
+enum State { IDLE, CHASE, FUSE, DEAD }
 
-# Glass cannon: dies in 3 hits, but the flame jet is a monster.
-@export var max_health: int = 30
-@export var move_speed: float = 330.0
-@export var aggro_range: float = 320.0  # < camera half-height: no off-screen aggro
-@export var cast_range: float = 240.0  # roots well inside flame range
-@export var cast_time: float = 0.9
-@export var flame_range: float = 320.0  # huge cone jet — clipped by walls
-@export var flame_half_angle: float = 32.0
-@export var flame_duration: float = 2.5
-@export var death_fire_radius: float = 70.0
-@export var death_fire_duration: float = 3.0
-@export var recover_time: float = 0.6
-@export var cast_cooldown: float = 3.0
-@export var respawn_delay: float = 10.0
+@export var max_health: int = 12  # one player shot
+@export var move_speed: float = 360.0
+@export var aggro_range: float = 320.0  # < camera half-height
+@export var fuse_range: float = 34.0
+@export var fuse_time: float = 0.4
+@export var blast_radius: float = 75.0
+@export var blast_damage: int = 60
+@export var respawn_delay: float = 12.0
 
 var _state: State = State.IDLE
-var _health: int = 30
-var _acquire_delay_left: float = 0.0
+var _health: int = 12
 var _home := Vector2.ZERO
 var _target_id: int = 0
+var _state_time: float = 0.0
+var _retarget_left: float = 0.0
+var _acquire_delay_left: float = 0.0
 var _alert_pos := Vector2.INF
 var _alert_time_left: float = 0.0
-var _state_time: float = 0.0
-var _cast_cd_left: float = 0.0
-var _retarget_left: float = 0.0
+var _fusing: bool = false
 var _seen: bool = false
 var _vis_poll_left: float = 0.0
 var _reveal_left: float = 0.0
 var _remote_position := Vector2.ZERO
 var _remote_rotation: float = 0.0
+var _remote_chasing: bool = false
 var _last_sync_tick: int = -1
 
 @onready var _body: Polygon2D = $Body
 @onready var _glow: PointLight2D = $Glow
 @onready var _health_bar: HealthBar = $HealthBar
-@onready var _cast_bar: CastBar = $CastBar
 @onready var _world: GameWorld = get_tree().get_first_node_in_group(&"game_world") as GameWorld
 
 
@@ -52,19 +48,33 @@ func _ready() -> void:
 	_health = max_health
 	_remote_position = position
 	_health_bar.set_health(_health, max_health)
-	_vis_poll_left = randf() * 0.1  # stagger visibility polls across enemies
+	_vis_poll_left = randf() * 0.1
 
 
 func _process(delta: float) -> void:
-	# LoS-gated visibility (all peers): unseen enemies don't render, except
-	# for the forced reveal while an attack is charging.
 	_reveal_left = maxf(0.0, _reveal_left - delta)
 	_vis_poll_left -= delta
 	if _vis_poll_left <= 0.0:
 		_vis_poll_left = 0.1
 		_seen = _state != State.DEAD and _world.team_sees(global_position)
-	# Reveal wins even when dead — kills must be seen wherever they happen.
+	var charging: bool = _is_charging()
+	if _fusing:
+		_reveal_left = maxf(_reveal_left, 0.2)
+		# The _fuse tween owns the glow here — the ramp to 2.0 is the tell.
+	elif charging:
+		_reveal_left = maxf(_reveal_left, 0.3)  # always visible while it hunts you
+		# Glow only while someone could see it — an enabled light eats a slot.
+		_glow.enabled = _seen
+		_glow.energy = 0.7 + 0.5 * sin(Time.get_ticks_msec() * 0.02)  # frantic pulse
+	else:
+		_glow.enabled = false
 	visible = _reveal_left > 0.0 or (_state != State.DEAD and _seen)
+
+
+func _is_charging() -> bool:
+	if multiplayer.is_server():
+		return _state == State.CHASE or _state == State.FUSE
+	return _remote_chasing
 
 
 func _physics_process(delta: float) -> void:
@@ -83,31 +93,29 @@ func host_take_damage(amount: int) -> void:
 	_health = maxi(0, _health - amount)
 	_sync_hp.rpc(_health)
 	if _health == 0:
-		_world.host_spawn_fire(global_position, death_fire_radius, death_fire_duration)
+		# Shot down — defused, no blast. That's the reward for good aim.
 		_enter(State.DEAD)
 		_die.rpc()
-		print("[combat] %s died (and ignited)" % name)
+		print("[combat] %s defused" % name)
 
 
 func host_alert(focus: Vector2) -> void:
 	if _state == State.IDLE:
-		_retarget_left = 0.0
-		# Sprint toward the noise; normal aggro takes over on arrival.
 		_alert_pos = focus
-		_alert_time_left = 8.0  # timeout so a wedged walker can't stick forever
+		_alert_time_left = 8.0
+		_retarget_left = 0.0
 
 
 func host_full_sync_to(peer_id: int) -> void:
 	_full_sync.rpc_id(peer_id, _health, global_position, _state == State.DEAD)
-	# Mid-cast joiners still see the charge — never an unsignaled attack.
-	if _state == State.CAST:
-		_cast.rpc_id(peer_id, maxf(0.05, cast_time - _state_time))
+	# Mid-fuse joiners still see the blast telegraph — never an unsignaled hit.
+	if _state == State.FUSE:
+		_fuse.rpc_id(peer_id, global_position)
 
 
 # --- host AI -----------------------------------------------------------------
 
 func _run_ai(delta: float) -> void:
-	_cast_cd_left = maxf(0.0, _cast_cd_left - delta)
 	_state_time += delta
 	match _state:
 		State.IDLE:
@@ -123,7 +131,7 @@ func _run_ai(delta: float) -> void:
 			else:
 				var to_home: Vector2 = _home - global_position
 				if to_home.length() > 24.0:
-					velocity = to_home.normalized() * (move_speed * 0.6)
+					velocity = to_home.normalized() * (move_speed * 0.5)
 					move_and_slide()
 					rotation = to_home.angle()
 			_retarget_left -= delta
@@ -132,7 +140,7 @@ func _run_ai(delta: float) -> void:
 				_target_id = _pick_target()
 				if _target_id != 0:
 					_alert_pos = Vector2.INF
-					_acquire_delay_left = 0.5  # grace before the first attack
+					_acquire_delay_left = 0.5
 					_enter(State.CHASE)
 		State.CHASE:
 			_acquire_delay_left = maxf(0.0, _acquire_delay_left - delta)
@@ -142,31 +150,35 @@ func _run_ai(delta: float) -> void:
 				_enter(State.IDLE)
 				return
 			var to_target: Vector2 = target.global_position - global_position
-			if to_target.length() > aggro_range * 1.25 or not _has_los(target.global_position):
+			if to_target.length() > aggro_range * 1.4 or not _has_los(target.global_position):
 				_target_id = 0
 				_enter(State.IDLE)
 				return
 			velocity = to_target.normalized() * move_speed
 			move_and_slide()
 			rotation = to_target.angle()
-			if to_target.length() <= cast_range and _cast_cd_left == 0.0 \
-					and _acquire_delay_left == 0.0:
-				# Flame direction locks NOW (rotation stops updating in CAST) —
-				# sidestep during the charge to escape the jet.
-				_enter(State.CAST)
-				_cast.rpc(cast_time)
-		State.CAST:
-			if _state_time >= cast_time:
-				_cast_cd_left = cast_cooldown
-				_world.host_spawn_flame_cone(global_position, rotation,
-						flame_range, flame_half_angle, flame_duration)
-				_enter(State.RECOVER)
-		State.RECOVER:
-			if _state_time >= recover_time:
-				_enter(State.CHASE if _target_id != 0 else State.IDLE)
+			if to_target.length() <= fuse_range and _acquire_delay_left == 0.0:
+				_enter(State.FUSE)
+				_fuse.rpc(global_position)
+		State.FUSE:
+			if _state_time >= fuse_time:
+				_explode()
 		State.DEAD:
 			if _state_time >= respawn_delay:
 				_respawn.rpc(_home)
+
+
+func _explode() -> void:
+	for pawn: Player in _world.alive_pawns():
+		if pawn.global_position.distance_to(global_position) > blast_radius + 12.0:
+			continue
+		if not _has_los(pawn.global_position):
+			continue  # blasts don't reach through walls — cover is cover
+		_world.host_damage_player(str(pawn.name).to_int(), blast_damage)
+	_world.host_alert_enemies(global_position, global_position, 400.0)
+	_enter(State.DEAD)
+	_die.rpc()
+	print("[combat] %s exploded" % name)
 
 
 func _enter(state: State) -> void:
@@ -195,35 +207,40 @@ func _stream_state() -> void:
 	if _state == State.DEAD:
 		return
 	var tick: int = Engine.get_physics_frames()
+	var charging: bool = _state == State.CHASE or _state == State.FUSE
 	for peer_id: int in Game.ready_peers:
 		if peer_id != 1:
-			_sync_motion.rpc_id(peer_id, tick, position, rotation)
+			_sync_motion.rpc_id(peer_id, tick, position, rotation, charging)
 
 
 # --- replication -------------------------------------------------------------
 
 @rpc("authority", "call_remote", "unreliable")
-func _sync_motion(tick: int, remote_position: Vector2, remote_rotation: float) -> void:
+func _sync_motion(tick: int, remote_position: Vector2, remote_rotation: float, chasing: bool) -> void:
 	if tick <= _last_sync_tick:
 		return
 	_last_sync_tick = tick
 	_remote_position = remote_position
 	_remote_rotation = remote_rotation
+	_remote_chasing = chasing
 	if position.distance_to(remote_position) > 200.0:
 		position = remote_position
 		reset_physics_interpolation()
 
 
 @rpc("authority", "call_local", "reliable")
-func _cast(duration: float) -> void:
-	# Glow enabled only for the pulse (energy-0 lights still eat light slots).
-	_reveal_left = duration + 0.4
-	_cast_bar.start(duration)
+func _fuse(at: Vector2) -> void:
+	_fusing = true
+	_glow.enabled = true
+	# Last-chance telegraph at the HOST's authoritative blast position — the
+	# remote copy's lerped position can trail by ~50px at this speed.
+	var marker := Telegraph.new()
+	marker.setup(at, blast_radius, fuse_time)
+	_world.add_child(marker)
+	_reveal_left = fuse_time + 0.4
 	_glow.enabled = true
 	var tween := create_tween()
-	tween.tween_property(_glow, ^"energy", 1.3, duration)
-	tween.tween_property(_glow, ^"energy", 0.0, 0.3)
-	tween.tween_callback(func() -> void: _glow.enabled = false)
+	tween.tween_property(_glow, ^"energy", 2.0, fuse_time)
 
 
 @rpc("authority", "call_local", "reliable")
@@ -241,8 +258,10 @@ func _sync_hp(hp: int) -> void:
 func _die() -> void:
 	_state = State.DEAD
 	_state_time = 0.0
-	_reveal_left = 0.6  # the kill is shown (the death fire reveals it too)
-	_cast_bar.stop()
+	_reveal_left = 0.6
+	_remote_chasing = false
+	_fusing = false
+	_glow.enabled = false
 	set_deferred(&"collision_layer", 0)
 
 
@@ -259,6 +278,7 @@ func _respawn(at: Vector2) -> void:
 	_target_id = 0
 	_alert_pos = Vector2.INF
 	_alert_time_left = 0.0
+	_fusing = false
 
 
 @rpc("authority", "call_remote", "reliable")

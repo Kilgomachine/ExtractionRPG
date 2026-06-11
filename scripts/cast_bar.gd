@@ -18,9 +18,10 @@ func _ready() -> void:
 	visible = false
 
 
-func start(duration: float) -> void:
+func start(duration: float, color: Color = Color(1.0, 0.62, 0.2)) -> void:
 	_duration = duration
 	_elapsed = 0.0
+	fill_color = color
 	visible = true
 
 

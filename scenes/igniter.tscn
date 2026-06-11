@@ -17,7 +17,7 @@ script = ExtResource("1_igniter")
 shape = SubResource("CircleShape2D_i")
 
 [node name="Body" type="Polygon2D" parent="."]
-polygon = PackedVector2Array(16, 0, 2, 6, -10, 12, -6, 0, -10, -12, 2, -6)
+polygon = PackedVector2Array(13, 0, 11.3, 6.5, 6.5, 11.3, 0, 13, -6.5, 11.3, -11.3, 6.5, -13, 0, -11.3, -6.5, -6.5, -11.3, 0, -13, 6.5, -11.3, 11.3, -6.5)
 color = Color(1, 0.42, 0.12, 1)
 
 [node name="Glow" type="PointLight2D" parent="."]

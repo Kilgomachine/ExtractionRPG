@@ -3,9 +3,13 @@ extends CharacterBody2D
 ## One player pawn. The OWNING peer simulates its own movement (split authority:
 ## clients own their avatars, the host owns the world) and streams position,
 ## rotation, and dodge state to everyone else, who interpolate toward it.
-## Health is HOST-owned and arrives via GameWorld RPCs — this script never
-## mutates its own hp. Input-gathering stays separate from state-mutation so a
-## later rollback (netfox) retrofit is a refactor, not a rewrite.
+## Health, ammo, and items are HOST-owned and arrive via GameWorld RPCs — this
+## script never mutates its own resources. Input-gathering stays separate from
+## state-mutation so a later rollback (netfox) retrofit is a refactor.
+##
+## QUICK BAR: slot 1 = weapon (LMB shoots, costs ammo, R reloads), slot 2 =
+## medkit (LMB starts a heal CAST), slots 3-4 reserved. Any cast (heal, reload,
+## locker search) slows you to 30% speed — committing is dangerous.
 
 const SNAP_DISTANCE: float = 200.0
 const MAX_HEALTH: int = 100
@@ -13,6 +17,12 @@ const SPAWN_GRACE: float = 2.0  # post-respawn invulnerability vs spawn camping
 # Lag grace: a remote pawn's dodge registers on the host ~RTT late, so the host
 # credits the full i-frame window from the flag's rise edge plus this margin.
 const REMOTE_DODGE_GRACE_MS: int = 120
+const CAST_SPEED_FACTOR: float = 0.3  # casting slows you by 70%
+const HEAL_CAST_TIME: float = 1.4
+const RELOAD_CAST_TIME: float = 1.5
+
+enum CastKind { NONE, HEAL, RELOAD }
+
 # All spots verified > enemy aggro/engage ranges (or wall-occluded) — keep it that way.
 const SPAWN_SPOTS: Array[Vector2] = [
 	Vector2(0, -40), Vector2(-40, 80), Vector2(-100, 0), Vector2(0, -120),
@@ -29,8 +39,17 @@ const SPAWN_SPOTS: Array[Vector2] = [
 var spawn_slot: int = 0
 ## Host-synced via GameWorld._sync_player_hp — never set locally.
 var dead: bool = false
+## Quick-bar slot the local player has active (1 weapon, 2 medkit, 3-4 reserved).
+var active_slot: int = 1
 
 var _displayed_hp: int = MAX_HEALTH
+# Seeded with the starting kit (matches GameWorld._init_loadout) so the HUD
+# doesn't flash 0/0 for one RTT before the first authoritative sync arrives.
+var _counts: PackedInt32Array = PackedInt32Array([0, 2, 0, 16])  # scrap/medkit/valuable/ammo
+var _mag: int = 8
+var _reload_pending: bool = false
+var _cast_kind: CastKind = CastKind.NONE
+var _cast_left: float = 0.0
 var _searching: bool = false
 var _light_tween: Tween
 var _spawn_grace_left: float = 0.0
@@ -50,6 +69,7 @@ var _last_sync_tick: int = -1
 @onready var _glow: PointLight2D = $Glow
 @onready var _body: Polygon2D = $Body
 @onready var _health_bar: HealthBar = $HealthBar
+@onready var _cast_bar: CastBar = $CastBar
 @onready var _world: GameWorld = get_tree().get_first_node_in_group(&"game_world") as GameWorld
 
 
@@ -70,6 +90,8 @@ func _ready() -> void:
 	_camera.enabled = is_local
 	if not is_local:
 		_body.color = Color(0.55, 0.95, 0.65)  # friends read green
+	elif _world != null:
+		_refresh_hud()
 
 
 func _physics_process(delta: float) -> void:
@@ -80,7 +102,9 @@ func _physics_process(delta: float) -> void:
 		return
 	if is_multiplayer_authority():
 		var input: Dictionary = _gather_input()
+		_handle_slots(input)
 		_apply_movement(input, delta)
+		_advance_cast(delta)
 		_handle_fire(input, delta)
 		_handle_interact(input)
 		_apply_dodge_visual(_dodge_time_left > 0.0)
@@ -127,6 +151,22 @@ func update_displayed_health(hp: int) -> void:
 		tween.tween_property(_body, ^"modulate", Color.WHITE, 0.25)
 
 
+## Called on every peer by GameWorld when the host syncs items/ammo.
+func update_loadout(counts: PackedInt32Array, mag: int) -> void:
+	# duplicate(): on the HOST, call_local passes the authoritative array by
+	# reference — the pawn must never alias (let alone mutate) host truth.
+	var mag_rose: bool = mag > _mag
+	_counts = counts.duplicate()
+	_mag = mag
+	_reload_pending = false
+	if is_multiplayer_authority():
+		# The reload landed — kill any spurious second reload cast started on
+		# stale data while the sync was in flight.
+		if mag_rose and _cast_kind == CastKind.RELOAD:
+			_cancel_cast()
+		_refresh_hud()
+
+
 ## Searching a locker is a commitment: your lights drop hard. Friends keep
 ## their own cones — overwatch becomes their job.
 func set_searching(value: bool) -> void:
@@ -144,12 +184,13 @@ func set_dead(value: bool) -> void:
 	if dead == value:
 		return
 	dead = value
-	if value:
-		set_searching(false)  # death un-dims; the locker cancels host-side
 	visible = not value
 	set_deferred(&"collision_layer", 0 if value else 2)
-	if value and is_multiplayer_authority():
-		print("[combat] you died — respawning shortly")
+	if value:
+		set_searching(false)  # death un-dims; the locker cancels host-side
+		_cancel_cast()
+		if is_multiplayer_authority():
+			print("[combat] you died — respawning shortly")
 
 
 ## Called on every peer by GameWorld right before the hp refill on respawn.
@@ -168,6 +209,8 @@ func respawn_to_slot() -> void:
 		_camera.reset_smoothing()  # no cross-map glide while already vulnerable
 
 
+# --- input -------------------------------------------------------------------
+
 func _gather_input() -> Dictionary:
 	if Game.auto_walk:
 		# Headless harness: march at Brute1's post, guns blazing.
@@ -179,8 +222,18 @@ func _gather_input() -> Dictionary:
 			"fire": true,
 			"fire_pressed": false,
 			"interact": false,
-			"heal": false,
+			"reload": false,
+			"slot": 0,
 		}
+	var slot: int = 0
+	if Input.is_action_just_pressed(&"slot_1"):
+		slot = 1
+	elif Input.is_action_just_pressed(&"slot_2"):
+		slot = 2
+	elif Input.is_action_just_pressed(&"slot_3"):
+		slot = 3
+	elif Input.is_action_just_pressed(&"slot_4"):
+		slot = 4
 	return {
 		"move": Input.get_vector(&"move_left", &"move_right", &"move_up", &"move_down"),
 		"aim": get_global_mouse_position() - global_position,
@@ -188,14 +241,28 @@ func _gather_input() -> Dictionary:
 		"fire": Input.is_action_pressed(&"fire"),
 		"fire_pressed": Input.is_action_just_pressed(&"fire"),
 		"interact": Input.is_action_just_pressed(&"interact"),
-		"heal": Input.is_action_just_pressed(&"quick_heal"),
+		"reload": Input.is_action_just_pressed(&"reload"),
+		"slot": slot,
 	}
 
+
+func _handle_slots(input: Dictionary) -> void:
+	var slot: int = input["slot"]
+	if slot != 0 and slot != active_slot:
+		active_slot = slot
+		_cancel_cast()  # switching hands interrupts whatever you were doing
+		_refresh_hud()
+	if input["reload"]:
+		_try_start_reload()
+
+
+# --- movement ------------------------------------------------------------------
 
 func _apply_movement(input: Dictionary, delta: float) -> void:
 	_dodge_cooldown_left = maxf(0.0, _dodge_cooldown_left - delta)
 	var move: Vector2 = input["move"]
 	if input["dodge"] and _dodge_cooldown_left == 0.0:
+		_cancel_cast()  # the escape valve interrupts casts
 		_dodge_time_left = dodge_duration
 		_dodge_cooldown_left = dodge_cooldown
 		# Standing still? Dodge toward where you're aiming.
@@ -205,12 +272,62 @@ func _apply_movement(input: Dictionary, delta: float) -> void:
 		_dodge_time_left -= delta
 		velocity = _dodge_direction * dodge_speed
 	else:
-		velocity = move * move_speed
+		var speed: float = move_speed
+		if _cast_kind != CastKind.NONE or _searching:
+			speed *= CAST_SPEED_FACTOR  # committing slows you by 70%
+		velocity = move * speed
 	move_and_slide()
 	var aim: Vector2 = input["aim"]
 	if aim.length_squared() > 4.0:
 		rotation = aim.angle()
 
+
+# --- casting (heal, reload) ----------------------------------------------------
+
+func _advance_cast(delta: float) -> void:
+	if _cast_kind == CastKind.NONE:
+		return
+	_cast_left -= delta
+	if _cast_left > 0.0:
+		return
+	var finished: CastKind = _cast_kind
+	_cast_kind = CastKind.NONE
+	match finished:
+		CastKind.HEAL:
+			if multiplayer.is_server():
+				_world.host_handle_heal(1)
+			else:
+				_world._request_heal.rpc_id(1)
+		CastKind.RELOAD:
+			_reload_pending = true  # blocks a stale-data re-cast until sync lands
+			if multiplayer.is_server():
+				_world.host_handle_reload(1)
+			else:
+				_world._request_reload.rpc_id(1)
+
+
+func _start_cast(kind: CastKind, duration: float, color: Color) -> void:
+	_cast_kind = kind
+	_cast_left = duration
+	_cast_bar.start(duration, color)
+
+
+func _cancel_cast() -> void:
+	if _cast_kind == CastKind.NONE:
+		return
+	_cast_kind = CastKind.NONE
+	_cast_bar.stop()
+
+
+func _try_start_reload() -> void:
+	if _cast_kind != CastKind.NONE or _searching or _world == null or _reload_pending:
+		return
+	if _mag >= GameWorld.MAG_SIZE or _counts[GameWorld.ITEM_AMMO] <= 0:
+		return
+	_start_cast(CastKind.RELOAD, RELOAD_CAST_TIME, Color(0.55, 0.75, 1.0))
+
+
+# --- weapon / medkit use ---------------------------------------------------------
 
 func _handle_fire(input: Dictionary, delta: float) -> void:
 	_fire_cooldown_left = maxf(0.0, _fire_cooldown_left - delta)
@@ -226,28 +343,34 @@ func _handle_fire(input: Dictionary, delta: float) -> void:
 				_world._request_pickup.rpc_id(1, item.loot_id)
 			_fire_cooldown_left = maxf(_fire_cooldown_left, 0.15)
 			return
-	if _fire_cooldown_left > 0.0:
-		return
-	var aim: Vector2 = input["aim"]
-	if aim.length_squared() < 4.0:
-		return
-	_fire_cooldown_left = fire_rate
-	var direction: Vector2 = aim.normalized()
-	if multiplayer.is_server():
-		_world.host_handle_fire(1, direction)
-	else:
-		_world._request_fire.rpc_id(1, direction)
+	if _cast_kind != CastKind.NONE or _searching:
+		return  # hands are busy
+	match active_slot:
+		1:
+			if _fire_cooldown_left > 0.0:
+				return
+			if _mag <= 0:
+				_try_start_reload()  # dry click auto-racks a reload
+				return
+			var aim: Vector2 = input["aim"]
+			if aim.length_squared() < 4.0:
+				return
+			_fire_cooldown_left = fire_rate
+			var direction: Vector2 = aim.normalized()
+			if multiplayer.is_server():
+				_world.host_handle_fire(1, direction)
+			else:
+				_world._request_fire.rpc_id(1, direction)
+		2:
+			if input["fire_pressed"] and _counts[GameWorld.ITEM_MEDKIT] > 0 \
+					and _displayed_hp < MAX_HEALTH:
+				_start_cast(CastKind.HEAL, HEAL_CAST_TIME, Color(0.45, 0.9, 0.55))
 
 
 func _handle_interact(input: Dictionary) -> void:
-	if _world == null:
+	if _world == null or not input["interact"]:
 		return
-	if input["heal"]:
-		if multiplayer.is_server():
-			_world.host_handle_heal(1)
-		else:
-			_world._request_heal.rpc_id(1)
-	if not input["interact"]:
+	if _cast_kind != CastKind.NONE:
 		return
 	var nearest: Locker = null
 	var nearest_dist: float = Locker.SEARCH_RANGE
@@ -278,6 +401,25 @@ func _hovered_loot_in_range() -> LootItem:
 			return item
 	return null
 
+
+# --- HUD ----------------------------------------------------------------------
+
+func _refresh_hud() -> void:
+	if _world == null:
+		return
+	var slots: Array[String] = [
+		"[1] Rifle %d/%d" % [_mag, _counts[GameWorld.ITEM_AMMO]],
+		"[2] Medkit ×%d" % _counts[GameWorld.ITEM_MEDKIT],
+		"[3] —",
+		"[4] —",
+	]
+	slots[active_slot - 1] = "▶" + slots[active_slot - 1]
+	_world.update_quickbar("   ".join(slots))
+	_world.update_backpack("Backpack: Scrap ×%d · Valuables ×%d" %
+			[_counts[GameWorld.ITEM_SCRAP], _counts[GameWorld.ITEM_VALUABLE]])
+
+
+# --- visuals / replication -------------------------------------------------------
 
 func _apply_dodge_visual(active: bool) -> void:
 	if active:

@@ -1,10 +1,11 @@
-[gd_scene load_steps=6 format=3]
+[gd_scene load_steps=7 format=3]
 
 [ext_resource type="Script" path="res://scripts/world.gd" id="1_world"]
 [ext_resource type="PackedScene" path="res://scenes/enemy.tscn" id="2_enemy"]
 [ext_resource type="PackedScene" path="res://scenes/shooter.tscn" id="3_shooter"]
 [ext_resource type="PackedScene" path="res://scenes/locker.tscn" id="4_locker"]
 [ext_resource type="PackedScene" path="res://scenes/igniter.tscn" id="5_igniter"]
+[ext_resource type="PackedScene" path="res://scenes/exploder.tscn" id="6_exploder"]
 
 [node name="World" type="Node2D"]
 script = ExtResource("1_world")
@@ -48,6 +49,12 @@ position = Vector2(-700, -440)
 
 [node name="Igniter2" parent="Enemies" instance=ExtResource("5_igniter")]
 position = Vector2(300, 690)
+
+[node name="Exploder1" parent="Enemies" instance=ExtResource("6_exploder")]
+position = Vector2(-150, -550)
+
+[node name="Exploder2" parent="Enemies" instance=ExtResource("6_exploder")]
+position = Vector2(700, 300)
 
 [node name="Lockers" type="Node2D" parent="."]
 
@@ -94,7 +101,7 @@ offset_left = 14.0
 offset_top = 10.0
 offset_right = 1140.0
 offset_bottom = 36.0
-text = "WASD move · mouse aim · LMB shoot · SPACE dodge (i-frames) · E search · click loot · 1 medkit · F1 invite · ESC leave"
+text = "WASD aim LMB use · 1-4 slots · R reload · SPACE dodge · E search · click loot · F1 invite · ESC leave"
 
 [node name="QuickBar" type="Label" parent="Hud"]
 anchors_preset = 2
@@ -102,7 +109,22 @@ anchor_top = 1.0
 anchor_bottom = 1.0
 offset_left = 14.0
 offset_top = -34.0
-offset_right = 300.0
+offset_right = 620.0
 offset_bottom = -8.0
 grow_vertical = 0
-text = "[1] Medkit ×3"
+text = "▶[1] Rifle 8/16   [2] Medkit ×2   [3] —   [4] —"
+
+[node name="Backpack" type="Label" parent="Hud"]
+anchors_preset = 3
+anchor_left = 1.0
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = -360.0
+offset_top = -34.0
+offset_right = -14.0
+offset_bottom = -8.0
+grow_horizontal = 0
+grow_vertical = 0
+horizontal_alignment = 2
+text = "Backpack: Scrap ×0 · Valuables ×0"

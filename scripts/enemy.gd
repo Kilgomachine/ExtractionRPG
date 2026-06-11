@@ -29,6 +29,7 @@ var _slam_cd_left: float = 0.0
 var _retarget_left: float = 0.0
 var _alert_pos := Vector2.INF
 var _alert_time_left: float = 0.0
+var _acquire_delay_left: float = 0.0
 var _seen: bool = false
 var _vis_poll_left: float = 0.0
 var _reveal_left: float = 0.0
@@ -132,8 +133,10 @@ func _run_ai(delta: float) -> void:
 				_target_id = _pick_target()
 				if _target_id != 0:
 					_alert_pos = Vector2.INF
+					_acquire_delay_left = 0.5  # grace before the first slam
 					_enter(State.CHASE)
 		State.CHASE:
+			_acquire_delay_left = maxf(0.0, _acquire_delay_left - delta)
 			var target: Player = _world.pawn_for(_target_id)
 			if target == null or target.dead:
 				_target_id = 0
@@ -147,7 +150,8 @@ func _run_ai(delta: float) -> void:
 			velocity = to_target.normalized() * move_speed
 			move_and_slide()
 			rotation = to_target.angle()
-			if to_target.length() <= slam_range and _slam_cd_left == 0.0:
+			if to_target.length() <= slam_range and _slam_cd_left == 0.0 \
+					and _acquire_delay_left == 0.0:
 				# Lock the danger zone where the target stands NOW — moving
 				# out (or i-framing through) during the windup dodges it.
 				_slam_center = target.global_position

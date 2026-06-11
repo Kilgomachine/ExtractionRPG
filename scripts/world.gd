@@ -13,9 +13,20 @@ const PROJECTILE_DAMAGE: int = 12
 const ENEMY_PROJECTILE_DAMAGE: int = 10
 const FIRE_INTERVAL_MS: int = 280
 const RESPAWN_SECONDS: float = 3.0
-const HEAL_CHARGES: int = 3
 const HEAL_AMOUNT: int = 40
-const HEAL_INTERVAL_MS: int = 1000
+const HEAL_INTERVAL_MS: int = 500
+
+# Item types (indices into a loadout counts array) + weapon constants.
+const ITEM_SCRAP: int = 0
+const ITEM_MEDKIT: int = 1
+const ITEM_VALUABLE: int = 2
+const ITEM_AMMO: int = 3
+const MAG_SIZE: int = 8
+const AMMO_PER_PICKUP: int = 6
+const START_MEDKITS: int = 2
+const START_RESERVE: int = 16
+# Locker roll weights: scrap, medkit, valuables, ammo (ammo drops "sometimes").
+const LOOT_POOL: Array[int] = [0, 0, 0, 1, 1, 2, 2, 3, 3, 3]
 const TEAM_SIGHT_RANGE: float = 560.0
 const FLOOR_COLOR := Color(0.21, 0.215, 0.235)
 const WALL_COLOR := Color(0.42, 0.40, 0.37)
@@ -56,7 +67,8 @@ var _spawned_ids: Array[int] = []
 var _slots: Dictionary[int, int] = {}  # peer id -> spawn slot (host-assigned)
 var _next_slot: int = 1
 var _player_hp: Dictionary[int, int] = {}  # host-owned truth
-var _player_heals: Dictionary[int, int] = {}  # host-owned medkit charges
+var _loadouts: Dictionary[int, PackedInt32Array] = {}  # host-owned item counts
+var _mags: Dictionary[int, int] = {}  # host-owned bullets in the magazine
 var _fire_ready_at: Dictionary[int, int] = {}  # peer id -> Time.get_ticks_msec gate
 var _heal_ready_at: Dictionary[int, int] = {}
 var _next_projectile: int = 0
@@ -69,6 +81,7 @@ var _next_fire_zone: int = 0
 @onready var _loot: Node2D = $Loot
 @onready var _fires: Node2D = $Fires
 @onready var _quick_bar: Label = $Hud/QuickBar
+@onready var _backpack_label: Label = $Hud/Backpack
 
 
 func _enter_tree() -> void:
@@ -85,9 +98,8 @@ func _ready() -> void:
 		_local_spawn(1, 0)
 		_spawned_ids.append(1)
 		_player_hp[1] = Player.MAX_HEALTH
-		_player_heals[1] = HEAL_CHARGES
 		_sync_player_hp.rpc(1, Player.MAX_HEALTH)
-		_sync_heals.rpc(1, HEAL_CHARGES)
+		_init_loadout(1)
 	else:
 		# Our scene is loaded and ready to receive spawns — tell the host.
 		_request_join.rpc_id(1)
@@ -162,9 +174,8 @@ func _request_join() -> void:
 	_broadcast_ready_peers()
 	# Combat state for the newcomer: everyone's hp + every enemy's state.
 	_player_hp[new_id] = Player.MAX_HEALTH
-	_player_heals[new_id] = HEAL_CHARGES
 	_sync_player_hp.rpc(new_id, Player.MAX_HEALTH)
-	_sync_heals.rpc_id(new_id, new_id, HEAL_CHARGES)
+	_init_loadout(new_id)
 	for existing_id: int in _spawned_ids:
 		if existing_id != new_id:
 			_sync_player_hp.rpc_id(new_id, existing_id, _player_hp[existing_id])
@@ -179,6 +190,17 @@ func _request_join() -> void:
 		var item := child as LootItem
 		if item != null and not item.is_queued_for_deletion():
 			_spawn_loot.rpc_id(new_id, item.loot_id, item.loot_type, item.position)
+	# Active fire zones still burning — the joiner must SEE what can hurt them.
+	for child: Node in _fires.get_children():
+		var zone := child as FireZone
+		if zone == null or zone.is_queued_for_deletion():
+			continue
+		var fire_id: int = int(String(zone.name).trim_prefix("f"))
+		if zone.cone:
+			_spawn_flame.rpc_id(new_id, fire_id, zone.position, zone.direction,
+					zone.radius, zone.half_angle_deg, zone.remaining())
+		else:
+			_spawn_fire.rpc_id(new_id, fire_id, zone.position, zone.radius, zone.remaining())
 
 
 @rpc("authority", "call_remote", "reliable")
@@ -211,7 +233,8 @@ func _local_despawn(id: int) -> void:
 func _on_peer_disconnected(id: int) -> void:
 	_spawned_ids.erase(id)
 	_player_hp.erase(id)
-	_player_heals.erase(id)
+	_loadouts.erase(id)
+	_mags.erase(id)
 	_fire_ready_at.erase(id)
 	_heal_ready_at.erase(id)
 	_despawn.rpc(id)
@@ -270,12 +293,40 @@ func _on_respawn_timer(id: int, timer: Timer) -> void:
 		return
 	_player_respawned.rpc(id)
 	_player_hp[id] = Player.MAX_HEALTH
-	_player_heals[id] = HEAL_CHARGES
 	_sync_player_hp.rpc(id, Player.MAX_HEALTH)
-	_sync_heals.rpc(id, HEAL_CHARGES)
+	_init_loadout(id)  # fresh kit each life (gear-loss placeholder)
 
 
-# --- quick-use healing --------------------------------------------------------
+# --- loadout: backpack items + weapon magazine (host-owned truth) --------------
+
+func _init_loadout(id: int) -> void:
+	var counts := PackedInt32Array([0, 0, 0, 0])
+	counts[ITEM_MEDKIT] = START_MEDKITS
+	counts[ITEM_AMMO] = START_RESERVE
+	_loadouts[id] = counts
+	_mags[id] = MAG_SIZE
+	_push_loadout(id)
+
+
+func _push_loadout(id: int) -> void:
+	_sync_loadout.rpc(id, _loadouts[id], _mags[id])
+
+
+@rpc("authority", "call_local", "reliable")
+func _sync_loadout(id: int, counts: PackedInt32Array, mag: int) -> void:
+	var pawn := pawn_for(id)
+	if pawn != null:
+		pawn.update_loadout(counts, mag)
+
+
+## HUD bridges (called by the LOCAL pawn).
+func update_quickbar(text: String) -> void:
+	_quick_bar.text = text
+
+
+func update_backpack(text: String) -> void:
+	_backpack_label.text = text
+
 
 @rpc("any_peer", "call_remote", "reliable")
 func _request_heal() -> void:
@@ -284,27 +335,37 @@ func _request_heal() -> void:
 
 
 func host_handle_heal(id: int) -> void:
-	if not multiplayer.is_server() or not _player_hp.has(id):
+	if not multiplayer.is_server() or not _player_hp.has(id) or not _loadouts.has(id):
 		return
 	if _player_hp[id] <= 0 or _player_hp[id] >= Player.MAX_HEALTH:
 		return
-	if int(_player_heals.get(id, 0)) <= 0:
+	if _loadouts[id][ITEM_MEDKIT] <= 0:
 		return
 	var now: int = Time.get_ticks_msec()
 	if now < int(_heal_ready_at.get(id, 0)):
 		return
 	_heal_ready_at[id] = now + HEAL_INTERVAL_MS
-	_player_heals[id] -= 1
+	_loadouts[id][ITEM_MEDKIT] -= 1
 	_player_hp[id] = mini(Player.MAX_HEALTH, _player_hp[id] + HEAL_AMOUNT)
 	_sync_player_hp.rpc(id, _player_hp[id])
-	_sync_heals.rpc(id, _player_heals[id])
+	_push_loadout(id)
 
 
-@rpc("authority", "call_local", "reliable")
-func _sync_heals(id: int, charges: int) -> void:
-	# Update the quick bar only for the local player's own charges.
-	if id == multiplayer.get_unique_id():
-		_quick_bar.text = "[1] Medkit ×%d" % charges
+@rpc("any_peer", "call_remote", "reliable")
+func _request_reload() -> void:
+	if multiplayer.is_server():
+		host_handle_reload(multiplayer.get_remote_sender_id())
+
+
+func host_handle_reload(id: int) -> void:
+	if not multiplayer.is_server() or not _loadouts.has(id) or _player_hp.get(id, 0) <= 0:
+		return
+	var take: int = mini(MAG_SIZE - int(_mags.get(id, 0)), _loadouts[id][ITEM_AMMO])
+	if take <= 0:
+		return
+	_mags[id] += take
+	_loadouts[id][ITEM_AMMO] -= take
+	_push_loadout(id)
 
 
 @rpc("authority", "call_local", "reliable")
@@ -338,10 +399,14 @@ func host_handle_fire(id: int, direction: Vector2) -> void:
 	var pawn := pawn_for(id)
 	if pawn == null or direction == Vector2.ZERO:
 		return
+	if int(_mags.get(id, 0)) <= 0:
+		return  # dry — the client should be reloading
 	var now: int = Time.get_ticks_msec()
 	if now < int(_fire_ready_at.get(id, 0)):
 		return
 	_fire_ready_at[id] = now + FIRE_INTERVAL_MS
+	_mags[id] -= 1
+	_push_loadout(id)
 	var dir: Vector2 = direction.normalized()
 	_next_projectile += 1
 	_spawn_projectile.rpc(_next_projectile, pawn.global_position + dir * 22.0, dir, false)
@@ -393,12 +458,21 @@ func host_projectile_hit(pid: int, target: Node, hostile: bool) -> bool:
 
 # --- fire zones (Igniter casts and death bursts) ------------------------------
 
-## Host-only: spawn a burning ground zone on every peer.
+## Host-only: spawn a burning ground circle on every peer.
 func host_spawn_fire(at: Vector2, radius: float, duration: float) -> void:
 	if not multiplayer.is_server():
 		return
 	_next_fire_zone += 1
 	_spawn_fire.rpc(_next_fire_zone, at, radius, duration)
+
+
+## Host-only: spawn a wall-clipped flame cone on every peer (Igniter jet).
+func host_spawn_flame_cone(origin: Vector2, dir_angle: float, fire_range: float,
+		half_deg: float, duration: float) -> void:
+	if not multiplayer.is_server():
+		return
+	_next_fire_zone += 1
+	_spawn_flame.rpc(_next_fire_zone, origin, dir_angle, fire_range, half_deg, duration)
 
 
 @rpc("authority", "call_local", "reliable")
@@ -411,6 +485,17 @@ func _spawn_fire(fire_id: int, at: Vector2, radius: float, duration: float) -> v
 	_fires.add_child(zone)
 
 
+@rpc("authority", "call_local", "reliable")
+func _spawn_flame(fire_id: int, origin: Vector2, dir_angle: float, fire_range: float,
+		half_deg: float, duration: float) -> void:
+	if _fires.has_node("f%d" % fire_id):
+		return
+	var zone := FireZone.new()
+	zone.name = "f%d" % fire_id
+	zone.setup_cone(origin, dir_angle, fire_range, half_deg, duration)
+	_fires.add_child(zone)
+
+
 # --- loot (placeholder: items pop on the ground, clicks despawn them) --------
 
 ## Host-only, called by a Locker when a search completes.
@@ -420,7 +505,7 @@ func host_spawn_locker_loot(at: Vector2) -> void:
 	var count: int = 2 + (randi() % 2)
 	for i: int in count:
 		_next_loot += 1
-		_spawn_loot.rpc(_next_loot, randi() % 3, _scatter_point(at))
+		_spawn_loot.rpc(_next_loot, LOOT_POOL[randi() % LOOT_POOL.size()], _scatter_point(at))
 
 
 ## A spot near the locker that isn't inside a wall (cosmetic — loot draws
@@ -431,6 +516,11 @@ func _scatter_point(center: Vector2) -> Vector2:
 		if not _inside_any_wall(candidate, 10.0):
 			return candidate
 	return center
+
+
+## Public geometry helper for AI goal validation etc.
+func point_in_wall(point: Vector2, margin: float) -> bool:
+	return _inside_any_wall(point, margin)
 
 
 func _inside_any_wall(point: Vector2, margin: float) -> bool:
@@ -457,7 +547,12 @@ func host_request_pickup(player_id: int, loot_id: int) -> void:
 		return
 	if pawn.global_position.distance_to(item.global_position) > 100.0:
 		return
-	print("[loot] player %d picked up %s — inventory TBD, item despawned" % [player_id, item.display_name()])
+	if not _loadouts.has(player_id):
+		return
+	var gain: int = AMMO_PER_PICKUP if item.loot_type == ITEM_AMMO else 1
+	_loadouts[player_id][item.loot_type] += gain
+	_push_loadout(player_id)
+	print("[loot] player %d picked up %s (+%d)" % [player_id, item.display_name(), gain])
 	_despawn_loot.rpc(loot_id)
 
 
