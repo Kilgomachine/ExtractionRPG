@@ -31,6 +31,8 @@ var spawn_slot: int = 0
 var dead: bool = false
 
 var _displayed_hp: int = MAX_HEALTH
+var _searching: bool = false
+var _light_tween: Tween
 var _spawn_grace_left: float = 0.0
 var _dodge_time_left: float = 0.0
 var _dodge_cooldown_left: float = 0.0
@@ -112,18 +114,38 @@ func is_invulnerable() -> bool:
 ## Called on every peer by GameWorld when the host syncs hp.
 func update_displayed_health(hp: int) -> void:
 	var dropped: bool = hp < _displayed_hp
+	var rose: bool = hp > _displayed_hp
 	_displayed_hp = hp
 	_health_bar.set_health(hp, MAX_HEALTH)
 	if dropped and hp > 0:
 		var tween := create_tween()
 		_body.modulate = Color(2.2, 0.55, 0.55)
 		tween.tween_property(_body, ^"modulate", Color.WHITE, 0.18)
+	elif rose and hp > 0:
+		var tween := create_tween()
+		_body.modulate = Color(0.6, 2.0, 0.7)  # heal flash
+		tween.tween_property(_body, ^"modulate", Color.WHITE, 0.25)
+
+
+## Searching a locker is a commitment: your lights drop hard. Friends keep
+## their own cones — overwatch becomes their job.
+func set_searching(value: bool) -> void:
+	if _searching == value:
+		return
+	_searching = value
+	if _light_tween != null and _light_tween.is_valid():
+		_light_tween.kill()
+	_light_tween = create_tween().set_parallel(true)
+	_light_tween.tween_property(_vision_cone, ^"energy", 0.3 if value else 1.3, 0.35)
+	_light_tween.tween_property(_glow, ^"energy", 0.25 if value else 0.7, 0.35)
 
 
 func set_dead(value: bool) -> void:
 	if dead == value:
 		return
 	dead = value
+	if value:
+		set_searching(false)  # death un-dims; the locker cancels host-side
 	visible = not value
 	set_deferred(&"collision_layer", 0 if value else 2)
 	if value and is_multiplayer_authority():
@@ -157,6 +179,7 @@ func _gather_input() -> Dictionary:
 			"fire": true,
 			"fire_pressed": false,
 			"interact": false,
+			"heal": false,
 		}
 	return {
 		"move": Input.get_vector(&"move_left", &"move_right", &"move_up", &"move_down"),
@@ -165,6 +188,7 @@ func _gather_input() -> Dictionary:
 		"fire": Input.is_action_pressed(&"fire"),
 		"fire_pressed": Input.is_action_just_pressed(&"fire"),
 		"interact": Input.is_action_just_pressed(&"interact"),
+		"heal": Input.is_action_just_pressed(&"quick_heal"),
 	}
 
 
@@ -216,7 +240,14 @@ func _handle_fire(input: Dictionary, delta: float) -> void:
 
 
 func _handle_interact(input: Dictionary) -> void:
-	if not input["interact"] or _world == null:
+	if _world == null:
+		return
+	if input["heal"]:
+		if multiplayer.is_server():
+			_world.host_handle_heal(1)
+		else:
+			_world._request_heal.rpc_id(1)
+	if not input["interact"]:
 		return
 	var nearest: Locker = null
 	var nearest_dist: float = Locker.SEARCH_RANGE

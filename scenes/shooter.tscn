@@ -8,7 +8,7 @@ radius = 12.0
 
 [node name="Shooter" type="CharacterBody2D"]
 collision_layer = 4
-collision_mask = 7
+collision_mask = 15
 motion_mode = 1
 script = ExtResource("1_shooter")
 
@@ -20,8 +20,9 @@ polygon = PackedVector2Array(15, 0, -11, 10, -7, 0, -11, -10)
 color = Color(1, 0.62, 0.28, 1)
 
 [node name="Glow" type="PointLight2D" parent="."]
+enabled = false
 color = Color(1, 0.6, 0.32, 1)
-energy = 0.5
+energy = 0.0
 shadow_enabled = true
 shadow_filter = 1
 texture_scale = 1.3

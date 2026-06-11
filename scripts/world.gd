@@ -13,18 +13,22 @@ const PROJECTILE_DAMAGE: int = 12
 const ENEMY_PROJECTILE_DAMAGE: int = 10
 const FIRE_INTERVAL_MS: int = 280
 const RESPAWN_SECONDS: float = 3.0
+const HEAL_CHARGES: int = 3
+const HEAL_AMOUNT: int = 40
+const HEAL_INTERVAL_MS: int = 1000
+const TEAM_SIGHT_RANGE: float = 560.0
 const FLOOR_COLOR := Color(0.21, 0.215, 0.235)
 const WALL_COLOR := Color(0.42, 0.40, 0.37)
-const FLOOR_RECT := Rect2(-820, -620, 1640, 1240)
+const FLOOR_RECT := Rect2(-1100, -800, 2200, 1600)
 
 # Greybox layout, Rect2(x, y, w, h) in world units.
 const WALL_RECTS: Array[Rect2] = [
 	# outer border
-	Rect2(-820, -620, 1640, 40),
-	Rect2(-820, 580, 1640, 40),
-	Rect2(-820, -580, 40, 1160),
-	Rect2(780, -580, 40, 1160),
-	# buildings / cover
+	Rect2(-1100, -800, 2200, 40),
+	Rect2(-1100, 760, 2200, 40),
+	Rect2(-1100, -760, 40, 1520),
+	Rect2(1060, -760, 40, 1520),
+	# central buildings / cover (original layout)
 	Rect2(-500, -380, 320, 40),
 	Rect2(-500, -380, 40, 240),
 	Rect2(-260, -200, 200, 40),
@@ -34,20 +38,37 @@ const WALL_RECTS: Array[Rect2] = [
 	Rect2(-560, 220, 260, 40),
 	Rect2(-140, 360, 40, 180),
 	Rect2(-60, 140, 120, 120),
+	# expansion ring
+	Rect2(700, -560, 40, 260),     # NE corner room
+	Rect2(740, -560, 220, 40),
+	Rect2(820, 180, 240, 40),      # E
+	Rect2(600, 520, 40, 240),      # SE
+	Rect2(160, 600, 280, 40),      # S
+	Rect2(-760, 560, 40, 200),     # SW
+	Rect2(-980, 420, 220, 40),
+	Rect2(-980, -200, 260, 40),    # W
+	Rect2(-820, -560, 40, 220),    # NW
+	Rect2(-700, -360, 200, 40),
+	Rect2(-200, -680, 360, 40),    # N
 ]
 
 var _spawned_ids: Array[int] = []
 var _slots: Dictionary[int, int] = {}  # peer id -> spawn slot (host-assigned)
 var _next_slot: int = 1
 var _player_hp: Dictionary[int, int] = {}  # host-owned truth
+var _player_heals: Dictionary[int, int] = {}  # host-owned medkit charges
 var _fire_ready_at: Dictionary[int, int] = {}  # peer id -> Time.get_ticks_msec gate
+var _heal_ready_at: Dictionary[int, int] = {}
 var _next_projectile: int = 0
 var _next_loot: int = 0
+var _next_fire_zone: int = 0
 
 @onready var _players: Node2D = $Players
 @onready var _enemies: Node2D = $Enemies
 @onready var _projectiles: Node2D = $Projectiles
 @onready var _loot: Node2D = $Loot
+@onready var _fires: Node2D = $Fires
+@onready var _quick_bar: Label = $Hud/QuickBar
 
 
 func _enter_tree() -> void:
@@ -64,7 +85,9 @@ func _ready() -> void:
 		_local_spawn(1, 0)
 		_spawned_ids.append(1)
 		_player_hp[1] = Player.MAX_HEALTH
+		_player_heals[1] = HEAL_CHARGES
 		_sync_player_hp.rpc(1, Player.MAX_HEALTH)
+		_sync_heals.rpc(1, HEAL_CHARGES)
 	else:
 		# Our scene is loaded and ready to receive spawns — tell the host.
 		_request_join.rpc_id(1)
@@ -93,6 +116,29 @@ func alive_pawns() -> Array[Player]:
 	return result
 
 
+## True if any living team member has line of sight to the point.
+## Drives client-side enemy visibility (vision is shared between friends).
+func team_sees(point: Vector2) -> bool:
+	var space := get_world_2d().direct_space_state
+	for pawn: Player in alive_pawns():
+		if pawn.global_position.distance_to(point) > TEAM_SIGHT_RANGE:
+			continue
+		var query := PhysicsRayQueryParameters2D.create(pawn.global_position, point, 1)
+		if space.intersect_ray(query).is_empty():
+			return true
+	return false
+
+
+## Host-only: a loud event (Brute slam) puts nearby enemies on alert.
+func host_alert_enemies(origin: Vector2, focus: Vector2, radius: float) -> void:
+	if not multiplayer.is_server():
+		return
+	for child: Node in _enemies.get_children():
+		if child is Node2D and child.has_method(&"host_alert") \
+				and (child as Node2D).global_position.distance_to(origin) <= radius:
+			child.call(&"host_alert", focus)
+
+
 # --- join / leave orchestration (host decides who exists) -------------------
 
 ## A client's world is loaded; only the host acts on this.
@@ -116,7 +162,9 @@ func _request_join() -> void:
 	_broadcast_ready_peers()
 	# Combat state for the newcomer: everyone's hp + every enemy's state.
 	_player_hp[new_id] = Player.MAX_HEALTH
+	_player_heals[new_id] = HEAL_CHARGES
 	_sync_player_hp.rpc(new_id, Player.MAX_HEALTH)
+	_sync_heals.rpc_id(new_id, new_id, HEAL_CHARGES)
 	for existing_id: int in _spawned_ids:
 		if existing_id != new_id:
 			_sync_player_hp.rpc_id(new_id, existing_id, _player_hp[existing_id])
@@ -163,6 +211,9 @@ func _local_despawn(id: int) -> void:
 func _on_peer_disconnected(id: int) -> void:
 	_spawned_ids.erase(id)
 	_player_hp.erase(id)
+	_player_heals.erase(id)
+	_fire_ready_at.erase(id)
+	_heal_ready_at.erase(id)
 	_despawn.rpc(id)
 	_local_despawn(id)
 	_broadcast_ready_peers()
@@ -219,7 +270,41 @@ func _on_respawn_timer(id: int, timer: Timer) -> void:
 		return
 	_player_respawned.rpc(id)
 	_player_hp[id] = Player.MAX_HEALTH
+	_player_heals[id] = HEAL_CHARGES
 	_sync_player_hp.rpc(id, Player.MAX_HEALTH)
+	_sync_heals.rpc(id, HEAL_CHARGES)
+
+
+# --- quick-use healing --------------------------------------------------------
+
+@rpc("any_peer", "call_remote", "reliable")
+func _request_heal() -> void:
+	if multiplayer.is_server():
+		host_handle_heal(multiplayer.get_remote_sender_id())
+
+
+func host_handle_heal(id: int) -> void:
+	if not multiplayer.is_server() or not _player_hp.has(id):
+		return
+	if _player_hp[id] <= 0 or _player_hp[id] >= Player.MAX_HEALTH:
+		return
+	if int(_player_heals.get(id, 0)) <= 0:
+		return
+	var now: int = Time.get_ticks_msec()
+	if now < int(_heal_ready_at.get(id, 0)):
+		return
+	_heal_ready_at[id] = now + HEAL_INTERVAL_MS
+	_player_heals[id] -= 1
+	_player_hp[id] = mini(Player.MAX_HEALTH, _player_hp[id] + HEAL_AMOUNT)
+	_sync_player_hp.rpc(id, _player_hp[id])
+	_sync_heals.rpc(id, _player_heals[id])
+
+
+@rpc("authority", "call_local", "reliable")
+func _sync_heals(id: int, charges: int) -> void:
+	# Update the quick bar only for the local player's own charges.
+	if id == multiplayer.get_unique_id():
+		_quick_bar.text = "[1] Medkit ×%d" % charges
 
 
 @rpc("authority", "call_local", "reliable")
@@ -306,6 +391,26 @@ func host_projectile_hit(pid: int, target: Node, hostile: bool) -> bool:
 	return true
 
 
+# --- fire zones (Igniter casts and death bursts) ------------------------------
+
+## Host-only: spawn a burning ground zone on every peer.
+func host_spawn_fire(at: Vector2, radius: float, duration: float) -> void:
+	if not multiplayer.is_server():
+		return
+	_next_fire_zone += 1
+	_spawn_fire.rpc(_next_fire_zone, at, radius, duration)
+
+
+@rpc("authority", "call_local", "reliable")
+func _spawn_fire(fire_id: int, at: Vector2, radius: float, duration: float) -> void:
+	if _fires.has_node("f%d" % fire_id):
+		return
+	var zone := FireZone.new()
+	zone.name = "f%d" % fire_id
+	zone.setup(at, radius, duration)
+	_fires.add_child(zone)
+
+
 # --- loot (placeholder: items pop on the ground, clicks despawn them) --------
 
 ## Host-only, called by a Locker when a search completes.
@@ -376,16 +481,16 @@ func _despawn_loot(loot_id: int) -> void:
 # --- greybox map -------------------------------------------------------------
 
 func _build_map() -> void:
-	# Floor as 2x2 quads — separate canvas items, so the engine's 16-lights-
+	# Floor as 3x3 quads — separate canvas items, so the engine's 16-lights-
 	# per-item cap applies per area instead of to the whole map at once.
-	var half_size: Vector2 = FLOOR_RECT.size * 0.5
-	for ix: int in 2:
-		for iy: int in 2:
+	var cell: Vector2 = FLOOR_RECT.size / 3.0
+	for ix: int in 3:
+		for iy: int in 3:
 			var quad := Polygon2D.new()
-			var origin: Vector2 = FLOOR_RECT.position + Vector2(ix * half_size.x, iy * half_size.y)
+			var origin: Vector2 = FLOOR_RECT.position + Vector2(ix * cell.x, iy * cell.y)
 			quad.polygon = PackedVector2Array([
-				origin, origin + Vector2(half_size.x, 0),
-				origin + half_size, origin + Vector2(0, half_size.y),
+				origin, origin + Vector2(cell.x, 0),
+				origin + cell, origin + Vector2(0, cell.y),
 			])
 			quad.color = FLOOR_COLOR
 			quad.z_index = -10

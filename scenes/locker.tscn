@@ -6,6 +6,7 @@
 size = Vector2(26, 18)
 
 [node name="Locker" type="StaticBody2D"]
+collision_layer = 8
 z_index = 5
 script = ExtResource("1_locker")
 

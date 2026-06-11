@@ -1,45 +1,47 @@
-class_name Enemy
+class_name Igniter
 extends CharacterBody2D
-## "Brute" bandit. HOST-OWNED (authority 1, lives in the world scene): the host
-## runs the state machine and resolves damage; clients render streamed position
-## and locally-spawned telegraph visuals. Attacks are heavily telegraphed and
-## always dodgeable: the slam zone LOCKS where the target stood at windup start.
+## Fast bandit pyro. HOST-OWNED. Outruns players (290 vs 230) but must STOP
+## and visibly charge a cast bar before attacking — the rooted cast IS the
+## counterplay window. The cast sets the ground around it on fire (DoT zone);
+## dying sets it on fire too. LoS-gated visibility like all enemies.
 
-enum State { IDLE, CHASE, WINDUP, RECOVER, DEAD }
+enum State { IDLE, CHASE, CAST, RECOVER, DEAD }
 
-@export var max_health: int = 150
-@export var move_speed: float = 100.0  # slow artillery — the slam IS the threat
-@export var aggro_range: float = 320.0  # < camera half-HEIGHT (324): no off-screen aggro, ever
-@export var slam_range: float = 320.0  # = aggro: casts the moment it sees you
-@export var alert_radius_factor: float = 2.0  # slams alert enemies within aggro x this
-@export var slam_radius: float = 95.0
-@export var slam_damage: int = 70
-@export var slam_windup: float = 0.66
-@export var slam_recover: float = 0.55
-@export var slam_cooldown: float = 2.0
-@export var respawn_delay: float = 6.0
+@export var max_health: int = 45
+@export var move_speed: float = 290.0
+@export var aggro_range: float = 320.0  # < camera half-height: no off-screen aggro
+# cast_range < fire_radius: when it roots to cast, you are INSIDE the future
+# fire — the 0.9s charge is your window to get out. Keep that inequality.
+@export var cast_range: float = 85.0
+@export var cast_time: float = 0.9
+@export var fire_radius: float = 95.0
+@export var fire_duration: float = 4.0
+@export var death_fire_radius: float = 70.0
+@export var death_fire_duration: float = 3.0
+@export var recover_time: float = 0.6
+@export var cast_cooldown: float = 3.0
+@export var respawn_delay: float = 10.0
 
 var _state: State = State.IDLE
-var _health: int = 150
+var _health: int = 45
 var _home := Vector2.ZERO
 var _target_id: int = 0
-var _slam_center := Vector2.ZERO
-var _state_time: float = 0.0
-var _slam_cd_left: float = 0.0
-var _retarget_left: float = 0.0
 var _alert_pos := Vector2.INF
 var _alert_time_left: float = 0.0
+var _state_time: float = 0.0
+var _cast_cd_left: float = 0.0
+var _retarget_left: float = 0.0
 var _seen: bool = false
 var _vis_poll_left: float = 0.0
 var _reveal_left: float = 0.0
 var _remote_position := Vector2.ZERO
 var _remote_rotation: float = 0.0
 var _last_sync_tick: int = -1
-var _marker: Telegraph
 
 @onready var _body: Polygon2D = $Body
 @onready var _glow: PointLight2D = $Glow
 @onready var _health_bar: HealthBar = $HealthBar
+@onready var _cast_bar: CastBar = $CastBar
 @onready var _world: GameWorld = get_tree().get_first_node_in_group(&"game_world") as GameWorld
 
 
@@ -54,7 +56,7 @@ func _ready() -> void:
 
 func _process(delta: float) -> void:
 	# LoS-gated visibility (all peers): unseen enemies don't render, except
-	# for the forced reveal while an attack telegraph is running.
+	# for the forced reveal while an attack is charging.
 	_reveal_left = maxf(0.0, _reveal_left - delta)
 	_vis_poll_left -= delta
 	if _vis_poll_left <= 0.0:
@@ -74,56 +76,53 @@ func _physics_process(delta: float) -> void:
 		rotation = lerp_angle(rotation, _remote_rotation, blend)
 
 
-## A loud noise nearby (e.g. another Brute's slam) — investigate it.
-func host_alert(focus: Vector2) -> void:
-	if _state == State.IDLE:
-		_alert_pos = focus
-		_alert_time_left = 8.0  # timeout so a wedged walker can't stick forever
-		_retarget_left = 0.0
-
-
-## Host-only entry point for taking damage (called by GameWorld on projectile hit).
 func host_take_damage(amount: int) -> void:
 	if not multiplayer.is_server() or _state == State.DEAD:
 		return
 	_health = maxi(0, _health - amount)
 	_sync_hp.rpc(_health)
 	if _health == 0:
+		_world.host_spawn_fire(global_position, death_fire_radius, death_fire_duration)
 		_enter(State.DEAD)
 		_die.rpc()
-		print("[combat] %s died" % name)
+		print("[combat] %s died (and ignited)" % name)
 
 
-## Host-only: push full state to a late joiner.
+func host_alert(focus: Vector2) -> void:
+	if _state == State.IDLE:
+		_retarget_left = 0.0
+		# Sprint toward the noise; normal aggro takes over on arrival.
+		_alert_pos = focus
+		_alert_time_left = 8.0  # timeout so a wedged walker can't stick forever
+
+
 func host_full_sync_to(peer_id: int) -> void:
 	_full_sync.rpc_id(peer_id, _health, global_position, _state == State.DEAD)
-	# Mid-windup joiners must still see the danger zone — never an unsignaled hit.
-	if _state == State.WINDUP:
-		_telegraph.rpc_id(peer_id, _slam_center, slam_radius, maxf(0.05, slam_windup - _state_time))
+	# Mid-cast joiners still see the charge — never an unsignaled attack.
+	if _state == State.CAST:
+		_cast.rpc_id(peer_id, maxf(0.05, cast_time - _state_time))
 
 
-# --- host AI ---------------------------------------------------------------
+# --- host AI -----------------------------------------------------------------
 
 func _run_ai(delta: float) -> void:
-	_slam_cd_left = maxf(0.0, _slam_cd_left - delta)
+	_cast_cd_left = maxf(0.0, _cast_cd_left - delta)
 	_state_time += delta
 	match _state:
 		State.IDLE:
 			if _alert_pos.is_finite():
-				# Alerted: lumber toward the noise; aggro takes over en route.
 				_alert_time_left -= delta
 				var to_alert: Vector2 = _alert_pos - global_position
-				if _alert_time_left <= 0.0 or to_alert.length() <= 60.0:
+				if _alert_time_left <= 0.0 or to_alert.length() <= 50.0:
 					_alert_pos = Vector2.INF
 				else:
 					velocity = to_alert.normalized() * move_speed
 					move_and_slide()
 					rotation = to_alert.angle()
 			else:
-				# Leash: drift back home so Brutes don't migrate to the spawn spots.
 				var to_home: Vector2 = _home - global_position
 				if to_home.length() > 24.0:
-					velocity = to_home.normalized() * (move_speed * 0.8)
+					velocity = to_home.normalized() * (move_speed * 0.6)
 					move_and_slide()
 					rotation = to_home.angle()
 			_retarget_left -= delta
@@ -147,19 +146,16 @@ func _run_ai(delta: float) -> void:
 			velocity = to_target.normalized() * move_speed
 			move_and_slide()
 			rotation = to_target.angle()
-			if to_target.length() <= slam_range and _slam_cd_left == 0.0:
-				# Lock the danger zone where the target stands NOW — moving
-				# out (or i-framing through) during the windup dodges it.
-				_slam_center = target.global_position
-				_enter(State.WINDUP)
-				_telegraph.rpc(_slam_center, slam_radius, slam_windup)
-		State.WINDUP:
-			if _state_time >= slam_windup:
-				_resolve_slam()
-				_slam_cd_left = slam_cooldown
+			if to_target.length() <= cast_range and _cast_cd_left == 0.0:
+				_enter(State.CAST)
+				_cast.rpc(cast_time)
+		State.CAST:
+			if _state_time >= cast_time:
+				_cast_cd_left = cast_cooldown
+				_world.host_spawn_fire(global_position, fire_radius, fire_duration)
 				_enter(State.RECOVER)
 		State.RECOVER:
-			if _state_time >= slam_recover:
+			if _state_time >= recover_time:
 				_enter(State.CHASE if _target_id != 0 else State.IDLE)
 		State.DEAD:
 			if _state_time >= respawn_delay:
@@ -184,17 +180,8 @@ func _pick_target() -> int:
 
 func _has_los(point: Vector2) -> bool:
 	var space := get_world_2d().direct_space_state
-	var query := PhysicsRayQueryParameters2D.create(global_position, point, 1)  # walls only
+	var query := PhysicsRayQueryParameters2D.create(global_position, point, 1)
 	return space.intersect_ray(query).is_empty()
-
-
-func _resolve_slam() -> void:
-	for pawn: Player in _world.alive_pawns():
-		if pawn.global_position.distance_to(_slam_center) <= slam_radius + 12.0:
-			_world.host_damage_player(str(pawn.name).to_int(), slam_damage)
-	_impact.rpc()
-	# Slams are LOUD: everything nearby investigates the impact zone.
-	_world.host_alert_enemies(global_position, _slam_center, aggro_range * alert_radius_factor)
 
 
 func _stream_state() -> void:
@@ -206,7 +193,7 @@ func _stream_state() -> void:
 			_sync_motion.rpc_id(peer_id, tick, position, rotation)
 
 
-# --- replication -----------------------------------------------------------
+# --- replication -------------------------------------------------------------
 
 @rpc("authority", "call_remote", "unreliable")
 func _sync_motion(tick: int, remote_position: Vector2, remote_rotation: float) -> void:
@@ -221,31 +208,15 @@ func _sync_motion(tick: int, remote_position: Vector2, remote_rotation: float) -
 
 
 @rpc("authority", "call_local", "reliable")
-func _telegraph(center: Vector2, radius: float, windup: float) -> void:
-	if is_instance_valid(_marker):
-		_marker.queue_free()
-	_marker = Telegraph.new()
-	_marker.setup(center, radius, windup)
-	_world.add_child(_marker)
-	# Split-second reveal: the caster shows itself while the attack charges.
-	# Glow enabled only for the pulse — an energy-0 light still EATS a light
-	# slot toward the 16-per-canvas-item cap; enabled=false does not.
-	_reveal_left = windup + 0.35
+func _cast(duration: float) -> void:
+	# Glow enabled only for the pulse (energy-0 lights still eat light slots).
+	_reveal_left = duration + 0.4
+	_cast_bar.start(duration)
 	_glow.enabled = true
-	_glow.texture_scale = 3.0  # big flare so you can LOCATE the artillery
 	var tween := create_tween()
-	tween.tween_property(_glow, ^"energy", 1.1, windup * 0.8)
+	tween.tween_property(_glow, ^"energy", 1.3, duration)
 	tween.tween_property(_glow, ^"energy", 0.0, 0.3)
-	tween.tween_callback(func() -> void:
-		_glow.enabled = false
-		_glow.texture_scale = 1.6)
-
-
-@rpc("authority", "call_local", "reliable")
-func _impact() -> void:
-	var tween := create_tween()
-	tween.tween_property(_body, ^"scale", Vector2(1.45, 1.45), 0.05)
-	tween.tween_property(_body, ^"scale", Vector2.ONE, 0.2)
+	tween.tween_callback(func() -> void: _glow.enabled = false)
 
 
 @rpc("authority", "call_local", "reliable")
@@ -263,11 +234,9 @@ func _sync_hp(hp: int) -> void:
 func _die() -> void:
 	_state = State.DEAD
 	_state_time = 0.0
-	_reveal_left = 0.6  # the kill is shown even if the corpse was unseen
+	_reveal_left = 0.6  # the kill is shown (the death fire reveals it too)
+	_cast_bar.stop()
 	set_deferred(&"collision_layer", 0)
-	# Killed mid-windup: pull the marker so it can't show a phantom impact.
-	if is_instance_valid(_marker):
-		_marker.queue_free()
 
 
 @rpc("authority", "call_local", "reliable")
@@ -282,6 +251,7 @@ func _respawn(at: Vector2) -> void:
 	_state_time = 0.0
 	_target_id = 0
 	_alert_pos = Vector2.INF
+	_alert_time_left = 0.0
 
 
 @rpc("authority", "call_remote", "reliable")
@@ -293,5 +263,3 @@ func _full_sync(hp: int, at: Vector2, is_dead: bool) -> void:
 	reset_physics_interpolation()
 	_state = State.DEAD if is_dead else State.IDLE
 	set_deferred(&"collision_layer", 0 if is_dead else 4)
-	if is_dead and is_instance_valid(_marker):
-		_marker.queue_free()

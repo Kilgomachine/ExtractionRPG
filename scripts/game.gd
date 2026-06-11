@@ -107,6 +107,7 @@ func _register_input_actions() -> void:
 	_add_key_action(&"move_right", KEY_D)
 	_add_key_action(&"dodge", KEY_SPACE)
 	_add_key_action(&"interact", KEY_E)
+	_add_key_action(&"quick_heal", KEY_1)
 	_add_mouse_action(&"fire", MOUSE_BUTTON_LEFT)
 
 
