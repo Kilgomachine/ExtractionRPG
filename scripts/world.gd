@@ -47,10 +47,11 @@ const FLASH_RADIUS: float = 160.0
 const FLASH_STUN: float = 2.5
 
 # Gun specs keyed by ITEM type. The laser is special-cased (charge weapon).
+# kick = camera punch px; knockback = body shove px/s. Each gun has a feel.
 const GUN_SPECS: Dictionary[int, Dictionary] = {
-	7: {"name": "Rifle", "mag": 8, "dmg": 12, "interval_ms": 280, "pellets": 1, "spread_deg": 0.0, "sfx": "shot", "mag_index": 0},
-	8: {"name": "SMG", "mag": 24, "dmg": 6, "interval_ms": 110, "pellets": 1, "spread_deg": 5.0, "sfx": "shot_smg", "mag_index": 1},
-	9: {"name": "Shotgun", "mag": 4, "dmg": 8, "interval_ms": 900, "pellets": 5, "spread_deg": 11.0, "sfx": "shot_shotgun", "mag_index": 2},
+	7: {"name": "Rifle", "mag": 8, "dmg": 12, "interval_ms": 280, "pellets": 1, "spread_deg": 0.0, "sfx": "shot", "mag_index": 0, "kick": 7.0, "knockback": 45.0},
+	8: {"name": "SMG", "mag": 24, "dmg": 6, "interval_ms": 110, "pellets": 1, "spread_deg": 5.0, "sfx": "shot_smg", "mag_index": 1, "kick": 3.0, "knockback": 14.0},
+	9: {"name": "Shotgun", "mag": 4, "dmg": 8, "interval_ms": 900, "pellets": 5, "spread_deg": 11.0, "sfx": "shot_shotgun", "mag_index": 2, "kick": 16.0, "knockback": 190.0},
 }
 
 # Locker rolls (grenades uncommon, guns RARE — rarer than ammo).
@@ -177,6 +178,7 @@ func _ready() -> void:
 	dash_check.toggled.connect(func(on: bool) -> void: Game.set_dash_to_mouse(on))
 	($Hud/Console/Box/Input as LineEdit).text_submitted.connect(_on_console_submitted)
 	($Hud/DeathPanel/Col/LeaveDead as Button).pressed.connect(_leave_to_menu)
+	($Hud/DeathPanel/Col/RespawnDead as Button).pressed.connect(_ui_respawn)
 	($Hud/ExtractPanel/Note as Label).visible = true
 	for skill: int in 3:
 		var btn := $Hud/SkillPanel/Skills.get_child(skill + 1) as Button
@@ -430,6 +432,8 @@ func _local_spawn(id: int, slot: int) -> void:
 	pawn.name = str(id)
 	pawn.spawn_slot = slot
 	_players.add_child(pawn)
+	if _names.has(id):
+		pawn.set_display_name(_names[id])
 	print("[world] spawned player %d in slot %d (%d in raid)" % [id, slot, _players.get_child_count()])
 
 
@@ -488,6 +492,9 @@ func host_set_name(id: int, display_name: String) -> void:
 @rpc("authority", "call_local", "reliable")
 func _sync_name(id: int, display_name: String) -> void:
 	_names[id] = display_name
+	var pawn := pawn_for(id)
+	if pawn != null:
+		pawn.set_display_name(display_name)
 
 
 @rpc("authority", "call_local", "reliable")
@@ -564,6 +571,13 @@ func refresh_bag(counts: PackedInt32Array, equipped: int) -> void:
 		drop.pressed.connect(_ui_drop.bind(item_type))
 		row.add_child(drop)
 		list.add_child(row)
+
+
+func _ui_respawn() -> void:
+	if multiplayer.is_server():
+		host_respawn_player(1)
+	else:
+		_request_respawn.rpc_id(1)
 
 
 func _ui_spend_point(skill: int) -> void:
@@ -1189,6 +1203,52 @@ func host_spawn_flame_cone(origin: Vector2, dir_angle: float, fire_range: float,
 		return
 	_next_fire_zone += 1
 	_spawn_flame.rpc(_next_fire_zone, origin, dir_angle, fire_range, half_deg, duration)
+
+
+## Host-only: the Waller's wall ring.
+func host_spawn_ring(center: Vector2, radius: float, duration: float, skip_mask: int) -> void:
+	if not multiplayer.is_server():
+		return
+	_next_fire_zone += 1
+	_spawn_ring.rpc(_next_fire_zone, center, radius, duration, skip_mask)
+
+
+@rpc("authority", "call_local", "reliable")
+func _spawn_ring(ring_id: int, center: Vector2, radius: float, duration: float, skip_mask: int) -> void:
+	var ring := RingWalls.new()
+	ring.name = "r%d" % ring_id
+	ring.setup(center, radius, duration, skip_mask)
+	$Rings.add_child(ring)
+	Game.play_sfx("boom", center)
+
+
+## Host-only: the Waller's flame flood (circle with a safe cone).
+func host_spawn_burst(center: Vector2, safe_dir: float, radius: float, duration: float) -> void:
+	if not multiplayer.is_server():
+		return
+	_next_fire_zone += 1
+	_spawn_burst.rpc(_next_fire_zone, center, safe_dir, radius, duration)
+
+
+@rpc("authority", "call_local", "reliable")
+func _spawn_burst(fire_id: int, center: Vector2, safe_dir: float, radius: float, duration: float) -> void:
+	if _fires.has_node("f%d" % fire_id):
+		return
+	var zone := FireZone.new()
+	zone.name = "f%d" % fire_id
+	zone.setup(center, radius, duration)
+	zone.safe_cone = true
+	zone.safe_direction = safe_dir
+	zone.tick_interval = 0.125
+	zone.tick_damage = 4  # same flame as the Igniter's jet
+	_fires.add_child(zone)
+	Game.play_sfx("flame", center)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func _request_respawn() -> void:
+	if multiplayer.is_server():
+		host_respawn_player(multiplayer.get_remote_sender_id())
 
 
 @rpc("authority", "call_local", "reliable")

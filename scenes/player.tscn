@@ -1,8 +1,9 @@
-[gd_scene load_steps=5 format=3]
+[gd_scene load_steps=6 format=3]
 
 [ext_resource type="Script" path="res://scripts/player.gd" id="1_player"]
 [ext_resource type="Script" path="res://scripts/health_bar.gd" id="2_bar"]
 [ext_resource type="Script" path="res://scripts/cast_bar.gd" id="3_cast"]
+[ext_resource type="Script" path="res://scripts/name_tag.gd" id="4_name"]
 
 [sub_resource type="CircleShape2D" id="CircleShape2D_p"]
 radius = 13.0
@@ -38,6 +39,10 @@ script = ExtResource("2_bar")
 
 [node name="CastBar" type="Node2D" parent="."]
 script = ExtResource("3_cast")
+
+[node name="NameTag" type="Node2D" parent="."]
+offset = Vector2(0, -54)
+script = ExtResource("4_name")
 
 [node name="Camera2D" type="Camera2D" parent="."]
 process_callback = 0

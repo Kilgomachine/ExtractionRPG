@@ -1,4 +1,4 @@
-[gd_scene load_steps=11 format=3]
+[gd_scene load_steps=12 format=3]
 
 [ext_resource type="Script" path="res://scripts/world.gd" id="1_world"]
 [ext_resource type="PackedScene" path="res://scenes/enemy.tscn" id="2_enemy"]
@@ -10,6 +10,7 @@
 [ext_resource type="PackedScene" path="res://scenes/mother.tscn" id="8_mother"]
 [ext_resource type="PackedScene" path="res://scenes/siren.tscn" id="9_siren"]
 [ext_resource type="Script" path="res://scripts/extraction.gd" id="10_extract"]
+[ext_resource type="PackedScene" path="res://scenes/chamber.tscn" id="11_chamber"]
 
 [node name="World" type="Node2D"]
 script = ExtResource("1_world")
@@ -123,6 +124,12 @@ position = Vector2(1150, 150)
 [node name="Siren3" parent="Enemies" instance=ExtResource("9_siren")]
 position = Vector2(-300, 800)
 
+[node name="Chamber1" parent="Enemies" instance=ExtResource("11_chamber")]
+position = Vector2(0, -950)
+
+[node name="Chamber2" parent="Enemies" instance=ExtResource("11_chamber")]
+position = Vector2(1700, 600)
+
 [node name="Lockers" type="Node2D" parent="."]
 
 [node name="Locker1" parent="Lockers" instance=ExtResource("4_locker")]
@@ -206,6 +213,8 @@ position = Vector2(-1600, 20)
 [node name="Smokes" type="Node2D" parent="."]
 
 [node name="Corpses" type="Node2D" parent="."]
+
+[node name="Rings" type="Node2D" parent="."]
 
 [node name="Extraction1" type="Node2D" parent="."]
 position = Vector2(2020, -1440)
@@ -352,6 +361,9 @@ text = "YOU DIED
 Your gear stays on your corpse.
 A friend can loot it back for you."
 horizontal_alignment = 1
+
+[node name="RespawnDead" type="Button" parent="Hud/DeathPanel/Col"]
+text = "Respawn (testing only)"
 
 [node name="LeaveDead" type="Button" parent="Hud/DeathPanel/Col"]
 text = "Leave Raid"

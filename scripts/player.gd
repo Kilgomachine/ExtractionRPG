@@ -53,6 +53,7 @@ var _displayed_shield: int = 0
 var _counts: PackedInt32Array = PackedInt32Array([0, 2, 0, 30, 1, 1, 1, 1, 1, 1, 1])
 var _mags: PackedInt32Array = PackedInt32Array([8, 24, 4])
 var _shoot_slow_left: float = 0.0
+var _recoil := Vector2.ZERO
 var _reload_pending: bool = false
 var _cast_kind: CastKind = CastKind.NONE
 var _cast_left: float = 0.0
@@ -84,7 +85,19 @@ var _last_sync_tick: int = -1
 @onready var _body: Polygon2D = $Body
 @onready var _health_bar: HealthBar = $HealthBar
 @onready var _cast_bar: CastBar = $CastBar
+@onready var _name_tag: NameTag = $NameTag
 @onready var _world: GameWorld = get_tree().get_first_node_in_group(&"game_world") as GameWorld
+
+
+## Shown above the pawn so everyone can tell who is who (hidden on your own).
+func set_display_name(value: String) -> void:
+	if _name_tag != null:
+		_name_tag.set_text(value)
+	else:
+		_pending_name = value
+
+
+var _pending_name: String = ""
 
 
 func _enter_tree() -> void:
@@ -101,6 +114,9 @@ func _ready() -> void:
 	_health_bar.set_health(_displayed_hp, MAX_HEALTH)
 	var is_local: bool = is_multiplayer_authority()
 	_camera.enabled = is_local
+	if not _pending_name.is_empty():
+		_name_tag.set_text(_pending_name)
+	_name_tag.visible = not is_local  # you know your own name
 	if not is_local:
 		_body.color = Color(0.55, 0.95, 0.65)
 	elif _world != null:
@@ -367,7 +383,8 @@ func _apply_movement(input: Dictionary, delta: float) -> void:
 				_running = true
 			else:
 				_charm_left = 0.0
-		velocity = move * speed
+		velocity = move * speed + _recoil
+		_recoil = _recoil.lerp(Vector2.ZERO, 1.0 - exp(-10.0 * delta))
 		# The Mother's vacuum: client-side pull (movement is client-owned).
 		for node: Node in get_tree().get_nodes_in_group(&"suckers"):
 			var mother := node as MotherHugger
@@ -489,6 +506,11 @@ func _handle_fire(input: Dictionary, delta: float) -> void:
 			_fire_cooldown_left = float(spec["interval_ms"]) / 1000.0
 			_shoot_slow_left = 0.3  # firing plants your feet
 			var direction: Vector2 = aim.normalized()
+			# Recoil feel: camera punch + body shove, per gun.
+			_recoil = -direction * float(spec["knockback"])
+			_camera.offset = -direction * float(spec["kick"])
+			var kick_tween := create_tween()
+			kick_tween.tween_property(_camera, ^"offset", Vector2.ZERO, 0.16)
 			if multiplayer.is_server():
 				_world.host_handle_fire(1, direction, equipped_gun)
 			else:

@@ -5,8 +5,7 @@ with the commit that shipped them. Add freely; nothing here is forgotten.
 
 ## Up next (agreed, not yet built)
 - [ ] **Pre-raid loadout menu**: pick equipment before deploying (pairs with camp/stash — Phase 5/6 work)
-- [ ] **The Chamber** enemy: raises a wall ring around you + him, bursts the arena into flame except a safe
-      cone behind him (FireZone already supports `safe_cone` — half the work is done)
+- [ ] **REMOVE the testing respawn button** on the death panel once the loop is complete (added 2026-06 for testing)
 - [ ] **Charm as an expanding wave**: visible radial AOE from the Siren that charms on touch
       (currently charm applies instantly at song end)
 - [ ] **Per-player aggro tables**: aggro VALUES per player (damage adds, decay over time, highest wins)
@@ -24,6 +23,8 @@ with the commit that shipped them. Add freely; nothing here is forgotten.
 - [ ] Real navmesh pathing (NavigationRegion2D) — enemies currently slide along walls
 
 ## Done (most recent first)
+- [x] **The Waller (Chamber)** — wall-ring trap + flame flood with the safe cone · in-game name tags ·
+      per-gun recoil (camera kick + body shove) · testing respawn button
 - [x] Player names (Steam default, manual fallback) · UI clicks don't fire · equipped section in bag ·
       PERMADEATH (death = lootable corpse with your actual items, no respawn) · extraction points
       (loud!) · F2 dev console · teammates hidden outside LoS · XP/levels/skill points + placeholder tree
