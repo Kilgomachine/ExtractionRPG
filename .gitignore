@@ -5,3 +5,4 @@
 buildv/
 buildv*
 release/
+/*.zip
