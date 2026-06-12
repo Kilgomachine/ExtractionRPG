@@ -8,11 +8,10 @@ extends CharacterBody2D
 enum State { IDLE, CHASE, CAST, BURSTWAIT, RECOVER, DEAD }
 
 @export var max_health: int = 300
-@export var move_speed: float = 85.0
+@export var move_speed: float = 150.0  # fast enough to actually corner you
 @export var aggro_range: float = 320.0
 @export var trap_range: float = 240.0
-@export var cast_time: float = 1.4
-@export var burst_delay: float = 1.0
+@export var burst_delay: float = 1.4  # the readable window INSIDE the cage
 @export var ring_radius: float = 260.0
 @export var ring_duration: float = 6.0
 @export var burst_duration: float = 3.0
@@ -101,17 +100,15 @@ func host_alert(focus: Vector2) -> void:
 func host_stun(duration: float) -> void:
 	if _state == State.DEAD:
 		return
-	if _state == State.CAST:
-		_enter(State.RECOVER)
-		_cast_bar.stop()
+	# Stunning him mid-burst-charge pauses the fire (state time freezes).
 	_stun_left = maxf(_stun_left, duration)
 	_stunned_fx.rpc(duration)
 
 
 func host_full_sync_to(peer_id: int) -> void:
 	_full_sync.rpc_id(peer_id, _health, global_position, _state == State.DEAD)
-	if _state == State.CAST:
-		_cast_fx.rpc_id(peer_id, maxf(0.05, cast_time - _state_time))
+	if _state == State.BURSTWAIT:
+		_cast_fx.rpc_id(peer_id, maxf(0.05, burst_delay - _state_time))
 
 
 # --- host AI -----------------------------------------------------------------
@@ -166,16 +163,10 @@ func _run_ai(delta: float) -> void:
 			rotation = heading.angle()
 			if to_target.length() <= trap_range and _trap_cd_left == 0.0 \
 					and _acquire_delay_left == 0.0:
-				_enter(State.CAST)
-				_cast_fx.rpc(cast_time)
-		State.CAST:
-			var tracked: Player = _world.pawn_for(_target_id)
-			if tracked != null and not tracked.dead:
-				rotation = rotate_toward(rotation,
-						(tracked.global_position - global_position).angle(), 0.9 * delta)
-			if _state_time >= cast_time:
+				# NO WARNING: the walls ARE the ambush. The fire is the telegraph.
 				_raise_walls()
 				_enter(State.BURSTWAIT)
+				_cast_fx.rpc(burst_delay)
 		State.BURSTWAIT:
 			if _state_time >= burst_delay:
 				# The flood: everything inside burns except the cone behind him.
