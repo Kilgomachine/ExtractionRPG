@@ -13,7 +13,7 @@ enum State { IDLE, CHASE, CAST, RECOVER, DEAD }
 @export var aggro_range: float = 320.0  # < camera half-height: no off-screen aggro
 @export var cast_range: float = 240.0  # roots well inside flame range
 @export var cast_time: float = 0.9
-@export var flame_range: float = 320.0  # huge cone jet — clipped by walls
+@export var flame_range: float = 640.0  # ENORMOUS cone jet — clipped by walls
 @export var flame_half_angle: float = 32.0
 @export var flame_duration: float = 2.5
 @export var death_fire_radius: float = 70.0
@@ -25,6 +25,7 @@ enum State { IDLE, CHASE, CAST, RECOVER, DEAD }
 var _state: State = State.IDLE
 var _health: int = 30
 var _acquire_delay_left: float = 0.0
+var _stun_left: float = 0.0
 var _home := Vector2.ZERO
 var _target_id: int = 0
 var _alert_pos := Vector2.INF
@@ -62,7 +63,7 @@ func _process(delta: float) -> void:
 	_vis_poll_left -= delta
 	if _vis_poll_left <= 0.0:
 		_vis_poll_left = 0.1
-		_seen = _state != State.DEAD and _world.team_sees(global_position)
+		_seen = _state != State.DEAD and _world.sees_point(global_position)
 	# Reveal wins even when dead — kills must be seen wherever they happen.
 	visible = _reveal_left > 0.0 or (_state != State.DEAD and _seen)
 
@@ -77,7 +78,7 @@ func _physics_process(delta: float) -> void:
 		rotation = lerp_angle(rotation, _remote_rotation, blend)
 
 
-func host_take_damage(amount: int) -> void:
+func host_take_damage(amount: int, attacker: int = 0) -> void:
 	if not multiplayer.is_server() or _state == State.DEAD:
 		return
 	_health = maxi(0, _health - amount)
@@ -86,7 +87,28 @@ func host_take_damage(amount: int) -> void:
 		_world.host_spawn_fire(global_position, death_fire_radius, death_fire_duration)
 		_enter(State.DEAD)
 		_die.rpc()
+		_world.host_record_kill(attacker)
+		_world.host_drop_enemy_loot(global_position, 1)
 		print("[combat] %s died (and ignited)" % name)
+
+
+func host_stun(duration: float) -> void:
+	if _state == State.DEAD:
+		return
+	_stun_left = maxf(_stun_left, duration)
+	if _state == State.CAST:
+		_enter(State.RECOVER)
+		_cast_bar.stop()
+	_stunned_fx.rpc(duration)
+
+
+@rpc("authority", "call_local", "reliable")
+func _stunned_fx(duration: float) -> void:
+	_reveal_left = maxf(_reveal_left, duration)
+	_cast_bar.stop()
+	var tween := create_tween()
+	_body.modulate = Color(1.6, 1.6, 2.2)
+	tween.tween_property(_body, ^"modulate", Color.WHITE, duration)
 
 
 func host_alert(focus: Vector2) -> void:
@@ -107,6 +129,9 @@ func host_full_sync_to(peer_id: int) -> void:
 # --- host AI -----------------------------------------------------------------
 
 func _run_ai(delta: float) -> void:
+	if _stun_left > 0.0:
+		_stun_left -= delta
+		return
 	_cast_cd_left = maxf(0.0, _cast_cd_left - delta)
 	_state_time += delta
 	match _state:
@@ -186,9 +211,7 @@ func _pick_target() -> int:
 
 
 func _has_los(point: Vector2) -> bool:
-	var space := get_world_2d().direct_space_state
-	var query := PhysicsRayQueryParameters2D.create(global_position, point, 1)
-	return space.intersect_ray(query).is_empty()
+	return _world.sight_clear(global_position, point)  # walls + smoke
 
 
 func _stream_state() -> void:
@@ -235,6 +258,7 @@ func _sync_hp(hp: int) -> void:
 		var tween := create_tween()
 		_body.modulate = Color(2.2, 0.6, 0.6)
 		tween.tween_property(_body, ^"modulate", Color.WHITE, 0.18)
+		Game.play_sfx("hit", global_position)
 
 
 @rpc("authority", "call_local", "reliable")

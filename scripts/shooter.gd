@@ -16,7 +16,8 @@ extends CharacterBody2D
 @export var preferred_range: float = 220.0
 @export var chase_memory: float = 3.0  # keeps hunting last-seen position this long
 @export var fire_interval: float = 1.8
-@export var aim_time: float = 0.35
+@export var aim_time: float = 0.85  # long, readable stand-still before the shot
+@export var post_shot_root: float = 0.55  # and it stays planted after firing
 @export var respawn_delay: float = 8.0
 
 var _health: int = 30
@@ -30,6 +31,8 @@ var _target_id: int = 0
 var _last_seen := Vector2.INF
 var _lost_sight_for: float = 0.0
 var _acquire_delay_left: float = 0.0
+var _stun_left: float = 0.0
+var _post_root_left: float = 0.0
 var _cooldown_left: float = 1.0
 var _aim_left: float = 0.0
 var _retarget_left: float = 0.0
@@ -61,7 +64,7 @@ func _process(delta: float) -> void:
 	_vis_poll_left -= delta
 	if _vis_poll_left <= 0.0:
 		_vis_poll_left = 0.1
-		_seen = not _dead and _world.team_sees(global_position)
+		_seen = not _dead and _world.sees_point(global_position)
 	# Reveal wins even when dead — kills must be seen wherever they happen.
 	visible = _reveal_left > 0.0 or (not _dead and _seen)
 
@@ -85,14 +88,32 @@ func host_alert(focus: Vector2) -> void:
 		_lost_sight_for = 0.0
 
 
-func host_take_damage(amount: int) -> void:
+func host_take_damage(amount: int, attacker: int = 0) -> void:
 	if not multiplayer.is_server() or _dead:
 		return
 	_health = maxi(0, _health - amount)
 	_sync_hp.rpc(_health)
 	if _health == 0:
 		_die.rpc()
+		_world.host_record_kill(attacker)
+		_world.host_drop_enemy_loot(global_position, 1)
 		print("[combat] %s died" % name)
+
+
+func host_stun(duration: float) -> void:
+	if _dead:
+		return
+	_stun_left = maxf(_stun_left, duration)
+	_aim_left = 0.0  # interrupted mid-aim
+	_stunned_fx.rpc(duration)
+
+
+@rpc("authority", "call_local", "reliable")
+func _stunned_fx(duration: float) -> void:
+	_reveal_left = maxf(_reveal_left, duration)
+	var tween := create_tween()
+	_body.modulate = Color(1.6, 1.6, 2.2)
+	tween.tween_property(_body, ^"modulate", Color.WHITE, duration)
 
 
 func host_full_sync_to(peer_id: int) -> void:
@@ -107,10 +128,13 @@ func _run_ai(delta: float) -> void:
 		if _dead_time >= respawn_delay:
 			_respawn.rpc()
 		return
+	if _stun_left > 0.0:
+		_stun_left -= delta
+		return
 	_cooldown_left = maxf(0.0, _cooldown_left - delta)
 	_acquire_delay_left = maxf(0.0, _acquire_delay_left - delta)
 
-	# Rooted while aiming — this is the window where you gain ground.
+	# Rooted while aiming AND for a beat after firing — your windows to run.
 	if _aim_left > 0.0:
 		_aim_left -= delta
 		var aim_target: Player = _world.pawn_for(_target_id)
@@ -118,6 +142,10 @@ func _run_ai(delta: float) -> void:
 			rotation = (aim_target.global_position - global_position).angle()
 		if _aim_left <= 0.0:
 			_fire_at_target()
+			_post_root_left = post_shot_root
+		return
+	if _post_root_left > 0.0:
+		_post_root_left -= delta
 		return
 
 	var target: Player = _world.pawn_for(_target_id)
@@ -227,9 +255,7 @@ func _pick_target() -> int:
 
 
 func _has_los(point: Vector2) -> bool:
-	var space := get_world_2d().direct_space_state
-	var query := PhysicsRayQueryParameters2D.create(global_position, point, 1)  # walls only
-	return space.intersect_ray(query).is_empty()
+	return _world.sight_clear(global_position, point)  # walls + smoke
 
 
 func _stream_state() -> void:
@@ -276,6 +302,7 @@ func _sync_hp(hp: int) -> void:
 		var tween := create_tween()
 		_body.modulate = Color(2.2, 0.6, 0.6)
 		tween.tween_property(_body, ^"modulate", Color.WHITE, 0.18)
+		Game.play_sfx("hit", global_position)
 
 
 @rpc("authority", "call_local", "reliable")

@@ -30,6 +30,7 @@ var _retarget_left: float = 0.0
 var _alert_pos := Vector2.INF
 var _alert_time_left: float = 0.0
 var _acquire_delay_left: float = 0.0
+var _stun_left: float = 0.0
 var _seen: bool = false
 var _vis_poll_left: float = 0.0
 var _reveal_left: float = 0.0
@@ -60,7 +61,7 @@ func _process(delta: float) -> void:
 	_vis_poll_left -= delta
 	if _vis_poll_left <= 0.0:
 		_vis_poll_left = 0.1
-		_seen = _state != State.DEAD and _world.team_sees(global_position)
+		_seen = _state != State.DEAD and _world.sees_point(global_position)
 	# Reveal wins even when dead — kills must be seen wherever they happen.
 	visible = _reveal_left > 0.0 or (_state != State.DEAD and _seen)
 
@@ -84,7 +85,7 @@ func host_alert(focus: Vector2) -> void:
 
 
 ## Host-only entry point for taking damage (called by GameWorld on projectile hit).
-func host_take_damage(amount: int) -> void:
+func host_take_damage(amount: int, attacker: int = 0) -> void:
 	if not multiplayer.is_server() or _state == State.DEAD:
 		return
 	_health = maxi(0, _health - amount)
@@ -92,7 +93,25 @@ func host_take_damage(amount: int) -> void:
 	if _health == 0:
 		_enter(State.DEAD)
 		_die.rpc()
+		_world.host_record_kill(attacker)
+		_world.host_drop_enemy_loot(global_position, 2)
 		print("[combat] %s died" % name)
+
+
+## Flashbang etc.: freeze the brain for a while.
+func host_stun(duration: float) -> void:
+	if _state == State.DEAD:
+		return
+	_stun_left = maxf(_stun_left, duration)
+	_stunned_fx.rpc(duration)
+
+
+@rpc("authority", "call_local", "reliable")
+func _stunned_fx(duration: float) -> void:
+	_reveal_left = maxf(_reveal_left, duration)
+	var tween := create_tween()
+	_body.modulate = Color(1.6, 1.6, 2.2)
+	tween.tween_property(_body, ^"modulate", Color.WHITE, duration)
 
 
 ## Host-only: push full state to a late joiner.
@@ -106,6 +125,9 @@ func host_full_sync_to(peer_id: int) -> void:
 # --- host AI ---------------------------------------------------------------
 
 func _run_ai(delta: float) -> void:
+	if _stun_left > 0.0:
+		_stun_left -= delta
+		return
 	_slam_cd_left = maxf(0.0, _slam_cd_left - delta)
 	_state_time += delta
 	match _state:
@@ -187,9 +209,7 @@ func _pick_target() -> int:
 
 
 func _has_los(point: Vector2) -> bool:
-	var space := get_world_2d().direct_space_state
-	var query := PhysicsRayQueryParameters2D.create(global_position, point, 1)  # walls only
-	return space.intersect_ray(query).is_empty()
+	return _world.sight_clear(global_position, point)  # walls + smoke
 
 
 func _resolve_slam() -> void:
@@ -250,6 +270,7 @@ func _impact() -> void:
 	var tween := create_tween()
 	tween.tween_property(_body, ^"scale", Vector2(1.45, 1.45), 0.05)
 	tween.tween_property(_body, ^"scale", Vector2.ONE, 0.2)
+	Game.play_sfx("boom", _slam_center)
 
 
 @rpc("authority", "call_local", "reliable")
@@ -261,6 +282,7 @@ func _sync_hp(hp: int) -> void:
 		var tween := create_tween()
 		_body.modulate = Color(2.2, 0.6, 0.6)
 		tween.tween_property(_body, ^"modulate", Color.WHITE, 0.18)
+		Game.play_sfx("hit", global_position)
 
 
 @rpc("authority", "call_local", "reliable")

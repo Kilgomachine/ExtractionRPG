@@ -1,4 +1,4 @@
-[gd_scene load_steps=7 format=3]
+[gd_scene load_steps=9 format=3]
 
 [ext_resource type="Script" path="res://scripts/world.gd" id="1_world"]
 [ext_resource type="PackedScene" path="res://scenes/enemy.tscn" id="2_enemy"]
@@ -6,6 +6,8 @@
 [ext_resource type="PackedScene" path="res://scenes/locker.tscn" id="4_locker"]
 [ext_resource type="PackedScene" path="res://scenes/igniter.tscn" id="5_igniter"]
 [ext_resource type="PackedScene" path="res://scenes/exploder.tscn" id="6_exploder"]
+[ext_resource type="PackedScene" path="res://scenes/hugger.tscn" id="7_hugger"]
+[ext_resource type="PackedScene" path="res://scenes/mother.tscn" id="8_mother"]
 
 [node name="World" type="Node2D"]
 script = ExtResource("1_world")
@@ -26,6 +28,12 @@ position = Vector2(-430, 380)
 [node name="Brute3" parent="Enemies" instance=ExtResource("2_enemy")]
 position = Vector2(840, -440)
 
+[node name="Brute4" parent="Enemies" instance=ExtResource("2_enemy")]
+position = Vector2(-1700, -1050)
+
+[node name="Brute5" parent="Enemies" instance=ExtResource("2_enemy")]
+position = Vector2(1480, 1020)
+
 [node name="Shooter1" parent="Enemies" instance=ExtResource("3_shooter")]
 position = Vector2(300, -240)
 
@@ -44,17 +52,65 @@ position = Vector2(770, -360)
 [node name="Shooter6" parent="Enemies" instance=ExtResource("3_shooter")]
 position = Vector2(930, -340)
 
+[node name="Shooter7" parent="Enemies" instance=ExtResource("3_shooter")]
+position = Vector2(-1750, -1150)
+
+[node name="Shooter8" parent="Enemies" instance=ExtResource("3_shooter")]
+position = Vector2(1450, -1150)
+
+[node name="Shooter9" parent="Enemies" instance=ExtResource("3_shooter")]
+position = Vector2(1650, -50)
+
+[node name="Shooter10" parent="Enemies" instance=ExtResource("3_shooter")]
+position = Vector2(-1600, 1000)
+
 [node name="Igniter1" parent="Enemies" instance=ExtResource("5_igniter")]
 position = Vector2(-700, -440)
 
 [node name="Igniter2" parent="Enemies" instance=ExtResource("5_igniter")]
 position = Vector2(300, 690)
 
+[node name="Igniter3" parent="Enemies" instance=ExtResource("5_igniter")]
+position = Vector2(-1200, -700)
+
+[node name="Igniter4" parent="Enemies" instance=ExtResource("5_igniter")]
+position = Vector2(900, 1200)
+
 [node name="Exploder1" parent="Enemies" instance=ExtResource("6_exploder")]
 position = Vector2(-150, -550)
 
 [node name="Exploder2" parent="Enemies" instance=ExtResource("6_exploder")]
 position = Vector2(700, 300)
+
+[node name="Exploder3" parent="Enemies" instance=ExtResource("6_exploder")]
+position = Vector2(-1300, 500)
+
+[node name="Exploder4" parent="Enemies" instance=ExtResource("6_exploder")]
+position = Vector2(400, -1100)
+
+[node name="Hugger1" parent="Enemies" instance=ExtResource("7_hugger")]
+position = Vector2(-400, -1000)
+
+[node name="Hugger2" parent="Enemies" instance=ExtResource("7_hugger")]
+position = Vector2(1100, 600)
+
+[node name="Hugger3" parent="Enemies" instance=ExtResource("7_hugger")]
+position = Vector2(-1100, 1200)
+
+[node name="Mother" parent="Enemies" instance=ExtResource("8_mother")]
+position = Vector2(-1950, 1380)
+
+[node name="Hugger4" parent="Enemies" instance=ExtResource("7_hugger")]
+position = Vector2(-1870, 1320)
+
+[node name="Hugger5" parent="Enemies" instance=ExtResource("7_hugger")]
+position = Vector2(-2030, 1320)
+
+[node name="Hugger6" parent="Enemies" instance=ExtResource("7_hugger")]
+position = Vector2(-1950, 1260)
+
+[node name="Hugger7" parent="Enemies" instance=ExtResource("7_hugger")]
+position = Vector2(-1870, 1440)
 
 [node name="Lockers" type="Node2D" parent="."]
 
@@ -88,11 +144,55 @@ position = Vector2(990, -580)
 [node name="Locker10" parent="Lockers" instance=ExtResource("4_locker")]
 position = Vector2(-950, -60)
 
+[node name="Locker11" parent="Lockers" instance=ExtResource("4_locker")]
+position = Vector2(-1750, -980)
+
+[node name="Locker12" parent="Lockers" instance=ExtResource("4_locker")]
+position = Vector2(-1620, -1180)
+
+[node name="Locker13" parent="Lockers" instance=ExtResource("4_locker")]
+position = Vector2(1420, -1050)
+
+[node name="Locker14" parent="Lockers" instance=ExtResource("4_locker")]
+position = Vector2(1580, -1180)
+
+[node name="Locker15" parent="Lockers" instance=ExtResource("4_locker")]
+position = Vector2(1700, -80)
+
+[node name="Locker16" parent="Lockers" instance=ExtResource("4_locker")]
+position = Vector2(1820, 60)
+
+[node name="Locker17" parent="Lockers" instance=ExtResource("4_locker")]
+position = Vector2(1450, 950)
+
+[node name="Locker18" parent="Lockers" instance=ExtResource("4_locker")]
+position = Vector2(1550, 1150)
+
+[node name="Locker19" parent="Lockers" instance=ExtResource("4_locker")]
+position = Vector2(-1500, 950)
+
+[node name="Locker20" parent="Lockers" instance=ExtResource("4_locker")]
+position = Vector2(-1780, 1300)
+
+[node name="Locker21" parent="Lockers" instance=ExtResource("4_locker")]
+position = Vector2(-150, -1180)
+
+[node name="Locker22" parent="Lockers" instance=ExtResource("4_locker")]
+position = Vector2(150, -1250)
+
+[node name="Locker23" parent="Lockers" instance=ExtResource("4_locker")]
+position = Vector2(-1650, -150)
+
+[node name="Locker24" parent="Lockers" instance=ExtResource("4_locker")]
+position = Vector2(-1600, 20)
+
 [node name="Projectiles" type="Node2D" parent="."]
 
 [node name="Loot" type="Node2D" parent="."]
 
 [node name="Fires" type="Node2D" parent="."]
+
+[node name="Smokes" type="Node2D" parent="."]
 
 [node name="Hud" type="CanvasLayer" parent="."]
 
@@ -101,7 +201,7 @@ offset_left = 14.0
 offset_top = 10.0
 offset_right = 1140.0
 offset_bottom = 36.0
-text = "WASD aim LMB use · 1-4 slots · R reload · SPACE dodge · E search · click loot · F1 invite · ESC leave"
+text = "1-4 slots (re-press cycles) · LMB use · R reload · SHIFT sprint · SPACE dash · E search · B bag · TAB scores · ESC menu"
 
 [node name="QuickBar" type="Label" parent="Hud"]
 anchors_preset = 2
@@ -109,22 +209,101 @@ anchor_top = 1.0
 anchor_bottom = 1.0
 offset_left = 14.0
 offset_top = -34.0
-offset_right = 620.0
+offset_right = 760.0
 offset_bottom = -8.0
 grow_vertical = 0
-text = "▶[1] Rifle 8/16   [2] Medkit ×2   [3] —   [4] —"
+text = "▶[1] Rifle 8/30   [2] Medkit ×2   [3] Laser (2 ammo)   [4] Frag ×1"
 
-[node name="Backpack" type="Label" parent="Hud"]
+[node name="StaminaBack" type="ColorRect" parent="Hud"]
+anchors_preset = 2
+anchor_top = 1.0
+anchor_bottom = 1.0
+offset_left = 14.0
+offset_top = -52.0
+offset_right = 198.0
+offset_bottom = -42.0
+grow_vertical = 0
+color = Color(0.08, 0.08, 0.1, 0.85)
+
+[node name="StaminaFill" type="ColorRect" parent="Hud"]
+anchors_preset = 2
+anchor_top = 1.0
+anchor_bottom = 1.0
+offset_left = 16.0
+offset_top = -50.0
+offset_right = 196.0
+offset_bottom = -44.0
+grow_vertical = 0
+color = Color(0.45, 0.85, 0.5, 1)
+
+[node name="BagPanel" type="PanelContainer" parent="Hud"]
+visible = false
 anchors_preset = 3
 anchor_left = 1.0
 anchor_top = 1.0
 anchor_right = 1.0
 anchor_bottom = 1.0
-offset_left = -360.0
-offset_top = -34.0
+offset_left = -460.0
+offset_top = -70.0
 offset_right = -14.0
 offset_bottom = -8.0
 grow_horizontal = 0
 grow_vertical = 0
-horizontal_alignment = 2
-text = "Backpack: Scrap ×0 · Valuables ×0"
+
+[node name="Backpack" type="Label" parent="Hud/BagPanel"]
+text = "Scrap ×0 · Medkit ×2 · Valuables ×0 · Ammo ×30 · Frag ×1 · Smoke ×1 · Flash ×1"
+autowrap_mode = 2
+
+[node name="Scoreboard" type="PanelContainer" parent="Hud"]
+visible = false
+anchors_preset = 5
+anchor_left = 0.5
+anchor_right = 0.5
+offset_left = -300.0
+offset_top = 60.0
+offset_right = 300.0
+offset_bottom = 200.0
+grow_horizontal = 2
+
+[node name="Scores" type="Label" parent="Hud/Scoreboard"]
+text = "scoreboard"
+
+[node name="MenuPanel" type="PanelContainer" parent="Hud"]
+visible = false
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -140.0
+offset_top = -90.0
+offset_right = 140.0
+offset_bottom = 90.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="Menu" type="VBoxContainer" parent="Hud/MenuPanel"]
+theme_override_constants/separation = 10
+
+[node name="Title" type="Label" parent="Hud/MenuPanel/Menu"]
+text = "MENU (game keeps running!)"
+horizontal_alignment = 1
+
+[node name="Resume" type="Button" parent="Hud/MenuPanel/Menu"]
+text = "Resume"
+
+[node name="DashCheck" type="CheckButton" parent="Hud/MenuPanel/Menu"]
+text = "Dash toward mouse"
+
+[node name="Leave" type="Button" parent="Hud/MenuPanel/Menu"]
+text = "Leave Raid"
+
+[node name="FlashOverlay" type="ColorRect" parent="Hud"]
+modulate = Color(1, 1, 1, 0)
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+color = Color(1, 1, 1, 1)

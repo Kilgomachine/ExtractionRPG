@@ -4,12 +4,18 @@ extends Node2D
 ## Spawned/despawned only by host broadcasts; clicking sends a pickup request.
 ## (No inventory yet — the host just despawns picked items.)
 
+# Index = item type. The earlier 3-entry table silently turned ammo (type 3)
+# into scrap via the % clamp — keep this in sync with GameWorld item consts!
 const COLORS: Array[Color] = [
 	Color(0.72, 0.56, 0.4),   # scrap
 	Color(0.45, 0.9, 0.55),   # medkit
 	Color(1.0, 0.85, 0.3),    # valuables
+	Color(0.55, 0.75, 1.0),   # ammo case
+	Color(0.9, 0.35, 0.2),    # frag grenade
+	Color(0.7, 0.75, 0.85),   # smoke grenade
+	Color(1.0, 0.95, 0.5),    # flashbang
 ]
-const NAMES: Array[String] = ["Scrap", "Medkit", "Valuables"]
+const NAMES: Array[String] = ["Scrap", "Medkit", "Valuables", "Ammo", "Frag", "Smoke", "Flash"]
 const HOVER_RADIUS: float = 16.0
 const PICKUP_RANGE: float = 90.0
 

@@ -14,7 +14,7 @@ enum State { IDLE, CHASE, FUSE, DEAD }
 @export var aggro_range: float = 320.0  # < camera half-height
 @export var fuse_range: float = 34.0
 @export var fuse_time: float = 0.4
-@export var blast_radius: float = 75.0
+@export var blast_radius: float = 187.0  # kill it or eat the hit
 @export var blast_damage: int = 60
 @export var respawn_delay: float = 12.0
 
@@ -28,6 +28,7 @@ var _acquire_delay_left: float = 0.0
 var _alert_pos := Vector2.INF
 var _alert_time_left: float = 0.0
 var _fusing: bool = false
+var _stun_left: float = 0.0
 var _seen: bool = false
 var _vis_poll_left: float = 0.0
 var _reveal_left: float = 0.0
@@ -56,7 +57,7 @@ func _process(delta: float) -> void:
 	_vis_poll_left -= delta
 	if _vis_poll_left <= 0.0:
 		_vis_poll_left = 0.1
-		_seen = _state != State.DEAD and _world.team_sees(global_position)
+		_seen = _state != State.DEAD and _world.sees_point(global_position)
 	var charging: bool = _is_charging()
 	if _fusing:
 		_reveal_left = maxf(_reveal_left, 0.2)
@@ -87,7 +88,7 @@ func _physics_process(delta: float) -> void:
 		rotation = lerp_angle(rotation, _remote_rotation, blend)
 
 
-func host_take_damage(amount: int) -> void:
+func host_take_damage(amount: int, attacker: int = 0) -> void:
 	if not multiplayer.is_server() or _state == State.DEAD:
 		return
 	_health = maxi(0, _health - amount)
@@ -96,7 +97,19 @@ func host_take_damage(amount: int) -> void:
 		# Shot down — defused, no blast. That's the reward for good aim.
 		_enter(State.DEAD)
 		_die.rpc()
+		_world.host_record_kill(attacker)
+		_world.host_drop_enemy_loot(global_position, 1)
 		print("[combat] %s defused" % name)
+
+
+func host_stun(duration: float) -> void:
+	if _state == State.DEAD or _state == State.FUSE:
+		return  # a lit fuse doesn't care about flashbangs
+	_stun_left = maxf(_stun_left, duration)
+
+
+func _has_los(point: Vector2) -> bool:
+	return _world.sight_clear(global_position, point)  # walls + smoke
 
 
 func host_alert(focus: Vector2) -> void:
@@ -116,6 +129,9 @@ func host_full_sync_to(peer_id: int) -> void:
 # --- host AI -----------------------------------------------------------------
 
 func _run_ai(delta: float) -> void:
+	if _stun_left > 0.0:
+		_stun_left -= delta
+		return
 	_state_time += delta
 	match _state:
 		State.IDLE:
@@ -176,9 +192,15 @@ func _explode() -> void:
 			continue  # blasts don't reach through walls — cover is cover
 		_world.host_damage_player(str(pawn.name).to_int(), blast_damage)
 	_world.host_alert_enemies(global_position, global_position, 400.0)
+	_boom_fx.rpc()
 	_enter(State.DEAD)
 	_die.rpc()
 	print("[combat] %s exploded" % name)
+
+
+@rpc("authority", "call_local", "reliable")
+func _boom_fx() -> void:
+	Game.play_sfx("boom", global_position)
 
 
 func _enter(state: State) -> void:
@@ -195,12 +217,6 @@ func _pick_target() -> int:
 			best_dist = dist
 			best_id = str(pawn.name).to_int()
 	return best_id
-
-
-func _has_los(point: Vector2) -> bool:
-	var space := get_world_2d().direct_space_state
-	var query := PhysicsRayQueryParameters2D.create(global_position, point, 1)
-	return space.intersect_ray(query).is_empty()
 
 
 func _stream_state() -> void:

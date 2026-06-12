@@ -6,8 +6,6 @@ extends Node2D
 ## clipped at walls, so flame NEVER reaches through cover — visually or
 ## mechanically. ONLY the host ticks damage; i-frames apply per tick.
 
-const TICK_INTERVAL: float = 0.5
-const TICK_DAMAGE: int = 8
 const FAN_RAYS: int = 17
 
 var radius: float = 80.0
@@ -15,9 +13,12 @@ var duration: float = 4.0
 var cone: bool = false
 var direction: float = 0.0
 var half_angle_deg: float = 32.0
+# The Igniter's cone is LETHAL (x4 damage at x4 rate); death fires stay mild.
+var tick_interval: float = 0.5
+var tick_damage: int = 8
 
 var _elapsed: float = 0.0
-var _tick_left: float = TICK_INTERVAL
+var _tick_left: float = 0.5
 var _light: PointLight2D
 var _fan: PackedVector2Array = PackedVector2Array()
 
@@ -38,6 +39,9 @@ func setup_cone(origin: Vector2, dir_angle: float, fire_range: float,
 	radius = fire_range
 	half_angle_deg = half_deg
 	duration = fire_duration
+	tick_interval = 0.125
+	tick_damage = 32
+	_tick_left = tick_interval
 
 
 func _ready() -> void:
@@ -70,10 +74,10 @@ func _physics_process(delta: float) -> void:
 	_tick_left -= delta
 	if _tick_left > 0.0:
 		return
-	_tick_left = TICK_INTERVAL
+	_tick_left = tick_interval
 	for pawn: Player in _world.alive_pawns():
 		if _covers(pawn.global_position):
-			_world.host_damage_player(str(pawn.name).to_int(), TICK_DAMAGE)
+			_world.host_damage_player(str(pawn.name).to_int(), tick_damage)
 
 
 func _covers(point: Vector2) -> bool:
