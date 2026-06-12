@@ -285,6 +285,7 @@ theme_override_constants/separation = 4
 
 [node name="Scoreboard" type="PanelContainer" parent="Hud"]
 visible = false
+mouse_filter = 2
 anchors_preset = 5
 anchor_left = 0.5
 anchor_right = 0.5
@@ -382,9 +383,15 @@ offset_bottom = 70.0
 grow_horizontal = 2
 grow_vertical = 2
 
-[node name="Note" type="Label" parent="Hud/ExtractPanel"]
+[node name="Col" type="VBoxContainer" parent="Hud/ExtractPanel"]
+theme_override_constants/separation = 12
+
+[node name="Note" type="Label" parent="Hud/ExtractPanel/Col"]
 text = "EXTRACTED!"
 horizontal_alignment = 1
+
+[node name="BackExtract" type="Button" parent="Hud/ExtractPanel/Col"]
+text = "Back to Menu"
 
 [node name="SkillPanel" type="PanelContainer" parent="Hud"]
 visible = false

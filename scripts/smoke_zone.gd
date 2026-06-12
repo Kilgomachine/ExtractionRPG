@@ -30,6 +30,10 @@ func _ready() -> void:
 	add_child(occluder)
 
 
+func remaining() -> float:
+	return maxf(0.1, duration - _elapsed)
+
+
 func _physics_process(delta: float) -> void:
 	_elapsed += delta
 	if _elapsed >= duration:

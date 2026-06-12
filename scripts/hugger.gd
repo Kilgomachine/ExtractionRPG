@@ -68,13 +68,14 @@ func _physics_process(delta: float) -> void:
 		rotation = lerp_angle(rotation, _remote_rotation, blend)
 
 
-func host_take_damage(amount: int, attacker: int = 0) -> void:
+func host_take_damage(amount: int, attacker: int = 0) -> int:
 	if not multiplayer.is_server() or _state == State.DEAD:
-		return
+		return 0
 	if attacker > 0 and _state == State.IDLE:
 		_target_id = attacker  # getting shot IS awareness
 		_acquire_delay_left = 0.0
 		_enter(State.CHASE)
+	var applied: int = mini(amount, _health)
 	_health = maxi(0, _health - amount)
 	_sync_hp.rpc(_health)
 	if _health == 0:
@@ -84,6 +85,7 @@ func host_take_damage(amount: int, attacker: int = 0) -> void:
 		_die.rpc()
 		_world.host_record_kill(attacker)
 		_world.host_drop_enemy_loot(global_position, 1)
+	return applied
 
 
 func host_alert(focus: Vector2) -> void:
@@ -169,8 +171,9 @@ func _run_ai(delta: float) -> void:
 		State.LATCHED:
 			var victim: Player = _world.pawn_for(_target_id)
 			if victim == null or victim.dead:
-				if victim != null:
-					_latch.rpc(_target_id, false)
+				# ALWAYS broadcast the unlatch — even when the pawn is gone
+				# (extraction/disconnect), or we stay layer-0 and bulletproof.
+				_latch.rpc(_target_id, false)
 				_target_id = 0
 				_enter(State.IDLE)
 				return

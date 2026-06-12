@@ -89,9 +89,9 @@ func host_alert(focus: Vector2) -> void:
 		_lost_sight_for = 0.0
 
 
-func host_take_damage(amount: int, attacker: int = 0) -> void:
+func host_take_damage(amount: int, attacker: int = 0) -> int:
 	if not multiplayer.is_server() or _dead:
-		return
+		return 0
 	if attacker > 0:
 		# Getting shot IS awareness — turn on the shooter immediately.
 		_target_id = attacker
@@ -100,6 +100,7 @@ func host_take_damage(amount: int, attacker: int = 0) -> void:
 		var aggressor: Player = _world.pawn_for(attacker)
 		if aggressor != null:
 			_last_seen = aggressor.global_position
+	var applied: int = mini(amount, _health)
 	_health = maxi(0, _health - amount)
 	_sync_hp.rpc(_health)
 	if _health == 0:
@@ -107,6 +108,7 @@ func host_take_damage(amount: int, attacker: int = 0) -> void:
 		_world.host_record_kill(attacker)
 		_world.host_drop_enemy_loot(global_position, 2)
 		print("[combat] %s died" % name)
+	return applied
 
 
 func host_stun(duration: float) -> void:

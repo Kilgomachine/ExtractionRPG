@@ -128,6 +128,9 @@ const WALL_RECTS: Array[Rect2] = [
 ]
 
 var _spawned_ids: Array[int] = []
+# Peers whose WORLD is loaded — distinct from "has a pawn": an extracted
+# player still renders and must keep receiving streams (esp. the HOST).
+var _world_ready_ids: Array[int] = []
 var _slots: Dictionary[int, int] = {}
 var _next_slot: int = 1
 var _player_hp: Dictionary[int, int] = {}
@@ -179,7 +182,8 @@ func _ready() -> void:
 	($Hud/Console/Box/Input as LineEdit).text_submitted.connect(_on_console_submitted)
 	($Hud/DeathPanel/Col/LeaveDead as Button).pressed.connect(_leave_to_menu)
 	($Hud/DeathPanel/Col/RespawnDead as Button).pressed.connect(_ui_respawn)
-	($Hud/ExtractPanel/Note as Label).visible = true
+	($Hud/ExtractPanel/Col/BackExtract as Button).pressed.connect(_leave_to_menu)
+	($Hud/ExtractPanel/Col/Note as Label).visible = true
 	for skill: int in 3:
 		var btn := $Hud/SkillPanel/Skills.get_child(skill + 1) as Button
 		btn.pressed.connect(_ui_spend_point.bind(skill))
@@ -188,6 +192,7 @@ func _ready() -> void:
 		_slots[1] = 0
 		_local_spawn(1, 0)
 		_spawned_ids.append(1)
+		_world_ready_ids.append(1)
 		_player_hp[1] = Player.MAX_HEALTH
 		_stats[1] = PackedInt32Array([0, 0, 0, 0])
 		_sync_player_hp.rpc(1, Player.MAX_HEALTH)
@@ -334,6 +339,13 @@ func sees_point(point: Vector2) -> bool:
 	return sight_clear(eye, point + side) or sight_clear(eye, point - side)
 
 
+## Blast/explosion LoS: WALLS stop shrapnel; smoke does not.
+func blast_clear(from: Vector2, to: Vector2) -> bool:
+	var space := get_world_2d().direct_space_state
+	var query := PhysicsRayQueryParameters2D.create(from, to, 1)
+	return space.intersect_ray(query).is_empty()
+
+
 ## Line of sight: blocked by walls AND smoke clouds.
 func sight_clear(from: Vector2, to: Vector2) -> bool:
 	var space := get_world_2d().direct_space_state
@@ -379,6 +391,7 @@ func _request_join() -> void:
 	_next_slot += 1
 	_slots[new_id] = slot
 	_spawned_ids.append(new_id)
+	_world_ready_ids.append(new_id)
 	_spawn.rpc(new_id, slot)
 	_local_spawn(new_id, slot)
 	_broadcast_ready_peers()
@@ -390,6 +403,9 @@ func _request_join() -> void:
 		if existing_id != new_id:
 			_sync_player_hp.rpc_id(new_id, existing_id, _player_hp[existing_id])
 			_sync_stats.rpc_id(new_id, existing_id, _stats[existing_id])
+			_sync_shield.rpc_id(new_id, existing_id, int(_player_shield.get(existing_id, 0.0)))
+			_sync_xp.rpc_id(new_id, existing_id, int(_xp.get(existing_id, 0)),
+					int(_level.get(existing_id, 1)), int(_skill_points.get(existing_id, 0)))
 	for id: int in _names:
 		_sync_name.rpc_id(new_id, id, _names[id])
 	for child: Node in _enemies.get_children():
@@ -411,8 +427,36 @@ func _request_join() -> void:
 		if zone.cone:
 			_spawn_flame.rpc_id(new_id, fire_id, zone.position, zone.direction,
 					zone.radius, zone.half_angle_deg, zone.remaining())
+		elif zone.safe_cone:
+			# Waller bursts carry the safe cone — replaying as a plain circle
+			# would show the joiner a no-escape flood.
+			_spawn_burst.rpc_id(new_id, fire_id, zone.position, zone.safe_direction,
+					zone.radius, zone.remaining())
 		else:
 			_spawn_fire.rpc_id(new_id, fire_id, zone.position, zone.radius, zone.remaining())
+	# Corpses: the permadeath gear-recovery mechanic must survive a late join.
+	for child: Node in $Corpses.get_children():
+		var corpse := child as Corpse
+		if corpse == null or corpse.is_queued_for_deletion():
+			continue
+		var cid: int = int(String(corpse.name).trim_prefix("c"))
+		_spawn_corpse.rpc_id(new_id, cid, corpse.position, corpse.loot_count)
+		if not corpse.inventory.is_empty():
+			_set_corpse_inventory.rpc_id(new_id, cid, corpse.inventory)
+	# Active Waller rings: the joiner must collide with (and not see through)
+	# the same walls as everyone else.
+	for child: Node in $Rings.get_children():
+		var ring := child as RingWalls
+		if ring == null or ring.is_queued_for_deletion():
+			continue
+		_spawn_ring.rpc_id(new_id, int(String(ring.name).trim_prefix("r")),
+				ring.position, ring.radius, ring.remaining(), ring.skip_mask)
+	# Active smoke: opaque for everyone or no one.
+	for child: Node in _smokes.get_children():
+		var cloud := child as SmokeZone
+		if cloud == null or cloud.is_queued_for_deletion():
+			continue
+		_spawn_smoke.rpc_id(new_id, int(String(cloud.name).trim_prefix("s")), cloud.position)
 
 
 @rpc("authority", "call_remote", "reliable")
@@ -446,6 +490,7 @@ func _local_despawn(id: int) -> void:
 
 func _on_peer_disconnected(id: int) -> void:
 	_spawned_ids.erase(id)
+	_world_ready_ids.erase(id)
 	_player_hp.erase(id)
 	_player_shield.erase(id)
 	_shield_delay.erase(id)
@@ -462,7 +507,7 @@ func _on_peer_disconnected(id: int) -> void:
 
 
 func _broadcast_ready_peers() -> void:
-	Game.ready_peers = PackedInt32Array(_spawned_ids)
+	Game.ready_peers = PackedInt32Array(_world_ready_ids)
 	Game._set_ready_peers.rpc(Game.ready_peers)
 
 
@@ -655,6 +700,7 @@ func _host_player_death(id: int) -> void:
 		empty.resize(ITEM_TYPES)
 		_loadouts[id] = empty
 		_equipped[id] = -1
+		_mags[id] = PackedInt32Array([0, 0, 0])  # chambered rounds die with you
 		_push_loadout(id)
 	if id == 1:
 		_show_death_local()
@@ -680,9 +726,10 @@ func _show_death_local() -> void:
 	($Hud/DeathPanel as PanelContainer).visible = true
 
 
-## Console / harness escape hatch.
+## Console / harness escape hatch — DEAD players only (an alive client could
+## otherwise request a free full heal + kit + escape teleport).
 func host_respawn_player(id: int) -> void:
-	if multiplayer.is_server() and _player_hp.has(id):
+	if multiplayer.is_server() and _player_hp.get(id, 1) <= 0:
 		_on_respawn_timer(id, null)
 
 
@@ -730,11 +777,19 @@ func host_extract_player(id: int) -> void:
 		carried += n
 	print("[raid] player %d EXTRACTED with %d items" % [id, carried])
 	_extracted_fx.rpc(id, carried)
-	# Out of the raid: despawn the pawn (stash persistence is backlog).
+	# Out of the raid: despawn the pawn and CLEAR combat state so a same-frame
+	# death can't mint a corpse of already-extracted items. The peer stays in
+	# _world_ready_ids — they're still rendering (and the HOST must keep
+	# receiving everyone's streams).
 	_spawned_ids.erase(id)
+	_player_hp.erase(id)
+	_player_shield.erase(id)
+	_shield_delay.erase(id)
+	_loadouts.erase(id)
+	_mags.erase(id)
+	_equipped.erase(id)
 	_despawn.rpc(id)
 	_local_despawn(id)
-	_broadcast_ready_peers()
 
 
 @rpc("authority", "call_local", "reliable")
@@ -742,7 +797,7 @@ func _extracted_fx(id: int, carried: int) -> void:
 	Game.play_sfx("heal", Vector2.ZERO)
 	if id == multiplayer.get_unique_id():
 		var panel := $Hud/ExtractPanel as PanelContainer
-		($Hud/ExtractPanel/Note as Label).text = \
+		($Hud/ExtractPanel/Col/Note as Label).text = \
 				"EXTRACTED!\nYou made it out with %d items.\n(Stash coming soon — for now, glory.)" % carried
 		panel.visible = true
 
@@ -755,8 +810,8 @@ var _skill_points: Dictionary[int, int] = {}
 
 
 func host_award_xp(id: int, amount: int) -> void:
-	if not multiplayer.is_server() or id <= 0 or not _player_hp.has(id):
-		return
+	if not multiplayer.is_server() or id <= 0 or amount <= 0 or not _player_hp.has(id):
+		return  # amount 0 = damage that didn't apply (armor/overkill): no rpc spam
 	_xp[id] = int(_xp.get(id, 0)) + amount
 	var level: int = int(_level.get(id, 1))
 	while _xp[id] >= level * 100:
@@ -885,12 +940,17 @@ func host_handle_drop(id: int, item_type: int) -> void:
 	var pawn := pawn_for(id)
 	if pawn == null:
 		return
-	_loadouts[id][item_type] -= 1
+	# Ammo drops as a bundle matching what's pickable — no quantum minting.
+	var qty: int = 1
+	if item_type == ITEM_AMMO:
+		qty = mini(AMMO_PER_PICKUP, _loadouts[id][item_type])
+	_loadouts[id][item_type] -= qty
 	if _loadouts[id][item_type] <= 0 and _equipped.get(id, -1) == item_type:
 		_equipped[id] = -1  # dropped the gun in your hands
 	_push_loadout(id)
 	_next_loot += 1
-	_spawn_loot.rpc(_next_loot, item_type, pawn.global_position + Vector2.from_angle(randf() * TAU) * 24.0)
+	_spawn_loot.rpc(_next_loot, item_type,
+			pawn.global_position + Vector2.from_angle(randf() * TAU) * 24.0, qty, true)
 
 
 ## The Siren's doing: your weapon hits the dirt at your feet.
@@ -906,7 +966,8 @@ func host_force_drop_gun(id: int) -> void:
 	var pawn := pawn_for(id)
 	if pawn != null:
 		_next_loot += 1
-		_spawn_loot.rpc(_next_loot, gun, pawn.global_position + Vector2.from_angle(randf() * TAU) * 20.0)
+		_spawn_loot.rpc(_next_loot, gun,
+				pawn.global_position + Vector2.from_angle(randf() * TAU) * 20.0, 1, true)
 
 
 @rpc("any_peer", "call_remote", "reliable")
@@ -942,10 +1003,12 @@ func host_handle_reload(id: int, gun: int) -> void:
 	if not multiplayer.is_server() or not _loadouts.has(id) or _player_hp.get(id, 0) <= 0:
 		return
 	if not GUN_SPECS.has(gun) or _equipped.get(id, -1) != gun:
+		_push_loadout(id)  # nack: clears the client's _reload_pending flag
 		return
 	var idx: int = mag_index_for(gun)
 	var take: int = mini(int(GUN_SPECS[gun]["mag"]) - _mags[id][idx], _loadouts[id][ITEM_AMMO])
 	if take <= 0:
+		_push_loadout(id)  # nack: full mag / no ammo — unstick the client
 		return
 	_mags[id][idx] += take
 	_loadouts[id][ITEM_AMMO] -= take
@@ -1037,8 +1100,9 @@ func host_projectile_hit(pid: int, target: Node, hostile: bool, dmg: int, shoote
 			return false
 		host_damage_player(victim, dmg, shooter)
 	elif target.has_method(&"host_take_damage"):
-		target.call(&"host_take_damage", dmg, shooter)
-		host_award_xp(shooter, dmg)  # damage dealt to bandits = experience
+		# XP from damage actually APPLIED — no farming armored bosses/overkill.
+		var applied: int = int(target.call(&"host_take_damage", dmg, shooter))
+		host_award_xp(shooter, applied)
 	_despawn_projectile.rpc(pid)
 	return true
 
@@ -1075,7 +1139,7 @@ func host_handle_laser(id: int, direction: Vector2) -> void:
 	for child: Node in _enemies.get_children():
 		if child is Node2D and child.has_method(&"host_take_damage") \
 				and _near_segment((child as Node2D).global_position, from, to, 18.0):
-			child.call(&"host_take_damage", LASER_DAMAGE, id)
+			host_award_xp(id, int(child.call(&"host_take_damage", LASER_DAMAGE, id)))
 	for victim: Player in alive_pawns():
 		var vid: int = str(victim.name).to_int()
 		if vid != id and _near_segment(victim.global_position, from, to, 16.0):
@@ -1135,15 +1199,15 @@ func host_resolve_grenade(_gid: int, type: int, thrower: int, at: Vector2) -> vo
 	if not multiplayer.is_server():
 		return
 	match type:
-		0:  # frag
+		0:  # frag — blast LoS is WALLS ONLY (smoke is concealment, not cover)
 			for child: Node in _enemies.get_children():
 				if child is Node2D and child.has_method(&"host_take_damage") \
 						and (child as Node2D).global_position.distance_to(at) <= FRAG_RADIUS \
-						and sight_clear(at, (child as Node2D).global_position):
-					child.call(&"host_take_damage", FRAG_DAMAGE, thrower)
+						and blast_clear(at, (child as Node2D).global_position):
+					host_award_xp(thrower, int(child.call(&"host_take_damage", FRAG_DAMAGE, thrower)))
 			for victim: Player in alive_pawns():
 				if victim.global_position.distance_to(at) <= FRAG_RADIUS \
-						and sight_clear(at, victim.global_position):
+						and blast_clear(at, victim.global_position):
 					host_damage_player(str(victim.name).to_int(), FRAG_DAMAGE, thrower)
 			_boom_fx.rpc(at)
 		1:  # smoke
@@ -1280,8 +1344,9 @@ func host_spawn_locker_loot(at: Vector2) -> void:
 		return
 	var count: int = 3 + (randi() % 3)  # 3-5 items per locker
 	for i: int in count:
+		var rolled: int = LOOT_POOL[randi() % LOOT_POOL.size()]
 		_next_loot += 1
-		_spawn_loot.rpc(_next_loot, LOOT_POOL[randi() % LOOT_POOL.size()], _scatter_point(at))
+		_spawn_loot.rpc(_next_loot, rolled, _scatter_point(at), _amount_for(rolled), false)
 
 
 ## Dead enemies leave a lootable CORPSE (same two-step search as lockers).
@@ -1305,26 +1370,36 @@ func host_corpse_loot(at: Vector2, count: int) -> void:
 	if not multiplayer.is_server():
 		return
 	for i: int in count:
+		var rolled: int = LOOT_POOL_ENEMY[randi() % LOOT_POOL_ENEMY.size()]
 		_next_loot += 1
-		_spawn_loot.rpc(_next_loot, LOOT_POOL_ENEMY[randi() % LOOT_POOL_ENEMY.size()],
-				_scatter_point(at))
+		_spawn_loot.rpc(_next_loot, rolled, _scatter_point(at), _amount_for(rolled), false)
 
 
-## A dead PLAYER's actual belongings hit the floor (capped to keep it sane).
+## A dead PLAYER's actual belongings hit the floor. High value spills FIRST
+## (guns before scrap), ammo re-bundles losslessly, cap keeps it sane.
 func host_spill_inventory(at: Vector2, inv: PackedInt32Array) -> void:
 	if not multiplayer.is_server():
 		return
 	var spilled: int = 0
-	for item_type: int in inv.size():
+	for item_type: int in range(inv.size() - 1, -1, -1):  # guns (high types) first
 		var pile: int = inv[item_type]
-		if item_type == ITEM_AMMO:
-			pile = ceili(float(pile) / float(AMMO_PER_PICKUP))  # re-bundle into cases
+		if pile <= 0:
+			continue
+		if item_type == ITEM_AMMO or item_type == ITEM_AMMO_SMALL:
+			# Lossless re-bundle: full cases + one remainder pack.
+			while pile > 0 and spilled < 20:
+				var pack: int = mini(pile, AMMO_PER_PICKUP)
+				pile -= pack
+				spilled += 1
+				_next_loot += 1
+				_spawn_loot.rpc(_next_loot, ITEM_AMMO, _scatter_point(at), pack, false)
+			continue
 		for i: int in pile:
-			if spilled >= 16:
+			if spilled >= 20:
 				return
 			spilled += 1
 			_next_loot += 1
-			_spawn_loot.rpc(_next_loot, item_type, _scatter_point(at))
+			_spawn_loot.rpc(_next_loot, item_type, _scatter_point(at), 1, false)
 
 
 func _scatter_point(center: Vector2) -> Vector2:
@@ -1380,28 +1455,35 @@ func host_request_pickup(player_id: int, loot_id: int) -> void:
 		return
 	if not _loadouts.has(player_id):
 		return
-	var gain: int = 1
 	var store_as: int = item.loot_type
-	if item.loot_type == ITEM_AMMO:
-		gain = AMMO_PER_PICKUP
-	elif item.loot_type == ITEM_AMMO_SMALL:
-		gain = AMMO_SMALL_PICKUP
+	if item.loot_type == ITEM_AMMO_SMALL:
 		store_as = ITEM_AMMO  # small packs pour into the same reserve
+	var gain: int = item.amount  # the item says what it grants — no minting
 	_loadouts[player_id][store_as] += gain
 	_push_loadout(player_id)
-	host_award_xp(player_id, 15)  # looter's instinct
+	if not item.player_dropped:
+		host_award_xp(player_id, 15)  # looter's instinct — found loot only
 	print("[loot] player %d picked up %s (+%d)" % [player_id, item.display_name(), gain])
 	_despawn_loot.rpc(loot_id)
 
 
 @rpc("authority", "call_local", "reliable")
-func _spawn_loot(loot_id: int, loot_type: int, at: Vector2) -> void:
+func _spawn_loot(loot_id: int, loot_type: int, at: Vector2, qty: int = 1, dropped: bool = false) -> void:
 	if _loot.has_node("l%d" % loot_id):
 		return
 	var item := LootItem.new()
 	item.name = "l%d" % loot_id
-	item.setup(loot_id, loot_type, at)
+	item.setup(loot_id, loot_type, at, qty, dropped)
 	_loot.add_child(item)
+
+
+## What a freshly rolled loot diamond of this type contains.
+func _amount_for(loot_type: int) -> int:
+	if loot_type == ITEM_AMMO:
+		return AMMO_PER_PICKUP
+	if loot_type == ITEM_AMMO_SMALL:
+		return AMMO_SMALL_PICKUP
+	return 1
 
 
 @rpc("authority", "call_local", "reliable")

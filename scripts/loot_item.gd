@@ -27,14 +27,18 @@ const PICKUP_RANGE: float = 90.0
 
 var loot_id: int = 0
 var loot_type: int = 0
+var amount: int = 1  # what picking it up actually grants (kills quantum minting)
+var player_dropped: bool = false  # no XP for re-grabbing your own litter
 
 var _hover: bool = false
 var _local_pawn: Player
 
 
-func setup(id: int, type: int, at: Vector2) -> void:
+func setup(id: int, type: int, at: Vector2, qty: int = 1, dropped: bool = false) -> void:
 	loot_id = id
 	loot_type = type % COLORS.size()
+	amount = maxi(1, qty)
+	player_dropped = dropped
 	position = at
 
 

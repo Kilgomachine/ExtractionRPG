@@ -85,14 +85,15 @@ func host_alert(focus: Vector2) -> void:
 
 
 ## Host-only entry point for taking damage (called by GameWorld on projectile hit).
-func host_take_damage(amount: int, attacker: int = 0) -> void:
+func host_take_damage(amount: int, attacker: int = 0) -> int:
 	if not multiplayer.is_server() or _state == State.DEAD:
-		return
+		return 0
 	if attacker > 0 and _state != State.WINDUP:
 		_target_id = attacker  # getting shot IS awareness
 		_acquire_delay_left = 0.0
 		if _state == State.IDLE:
 			_enter(State.CHASE)
+	var applied: int = mini(amount, _health)
 	_health = maxi(0, _health - amount)
 	_sync_hp.rpc(_health)
 	if _health == 0:
@@ -101,12 +102,18 @@ func host_take_damage(amount: int, attacker: int = 0) -> void:
 		_world.host_record_kill(attacker)
 		_world.host_drop_enemy_loot(global_position, 3)
 		print("[combat] %s died" % name)
+	return applied
 
 
 ## Flashbang etc.: freeze the brain for a while.
 func host_stun(duration: float) -> void:
 	if _state == State.DEAD:
 		return
+	if _state == State.WINDUP:
+		# Stun CANCELS a charging slam — a frozen telegraph that later lands
+		# unannounced would be the unfairest hit in the game.
+		_enter(State.RECOVER)
+		_slam_cd_left = slam_cooldown * 0.5
 	_stun_left = maxf(_stun_left, duration)
 	_stunned_fx.rpc(duration)
 
@@ -114,6 +121,8 @@ func host_stun(duration: float) -> void:
 @rpc("authority", "call_local", "reliable")
 func _stunned_fx(duration: float) -> void:
 	_reveal_left = maxf(_reveal_left, duration)
+	if is_instance_valid(_marker):
+		_marker.queue_free()  # cancelled slam takes its telegraph with it
 	var tween := create_tween()
 	_body.modulate = Color(1.6, 1.6, 2.2)
 	tween.tween_property(_body, ^"modulate", Color.WHITE, duration)
@@ -257,6 +266,7 @@ func _telegraph(center: Vector2, radius: float, windup: float) -> void:
 	_marker = Telegraph.new()
 	_marker.setup(center, radius, windup)
 	_world.add_child(_marker)
+	_slam_center = center  # all peers: the impact SFX plays HERE, not at origin
 	# Split-second reveal: the caster shows itself while the attack charges.
 	# Glow enabled only for the pulse — an energy-0 light still EATS a light
 	# slot toward the 16-per-canvas-item cap; enabled=false does not.

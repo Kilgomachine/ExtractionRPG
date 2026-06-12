@@ -75,9 +75,10 @@ func _physics_process(delta: float) -> void:
 		rotation = lerp_angle(rotation, _remote_rotation, blend)
 
 
-func host_take_damage(amount: int, attacker: int = 0) -> void:
+func host_take_damage(amount: int, attacker: int = 0) -> int:
 	if not multiplayer.is_server() or _state == State.DEAD:
-		return
+		return 0
+	var applied: int = mini(amount, _health)
 	_health = maxi(0, _health - amount)
 	_sync_hp.rpc(_health)
 	if _health == 0:
@@ -86,6 +87,7 @@ func host_take_damage(amount: int, attacker: int = 0) -> void:
 		_world.host_record_kill(attacker)
 		_world.host_drop_enemy_loot(global_position, 2)
 		print("[combat] %s silenced" % name)
+	return applied
 
 
 func host_alert(focus: Vector2) -> void:

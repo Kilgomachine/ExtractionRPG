@@ -218,12 +218,15 @@ func update_loadout(counts: PackedInt32Array, mags: PackedInt32Array, equipped: 
 	var mag_idx: int = GameWorld.mag_index_for(equipped)
 	var mag_rose: bool = mag_idx >= 0 and mag_idx < mags.size() and mag_idx < _mags.size() \
 			and mags[mag_idx] > _mags[mag_idx]
+	var gun_changed: bool = equipped != equipped_gun
 	_counts = counts.duplicate()
 	_mags = mags.duplicate()
 	equipped_gun = equipped
 	_reload_pending = false
 	if is_multiplayer_authority():
-		if mag_rose and _cast_kind == CastKind.RELOAD:
+		# Cancel a running reload when the mag fills OR the gun itself changed
+		# mid-cast — finishing would request a reload for the WRONG weapon.
+		if _cast_kind == CastKind.RELOAD and (mag_rose or gun_changed):
 			_cancel_cast()
 		_refresh_hud()
 
@@ -288,6 +291,14 @@ func _gather_input() -> Dictionary:
 			"aim": to_brute, "dodge": false, "sprint": false,
 			"fire": true, "fire_pressed": false,
 			"interact": false, "reload": false, "bag": false, "slot": 0,
+		}
+	# Typing in the console (or any text field) must not drive the pawn —
+	# the Input singleton ignores GUI focus, so we gate it ourselves.
+	if get_viewport().gui_get_focus_owner() is LineEdit:
+		return {
+			"move": Vector2.ZERO, "aim": _last_aim, "dodge": false, "sprint": false,
+			"fire": false, "fire_pressed": false, "interact": false,
+			"reload": false, "bag": false, "slot": 0,
 		}
 	var slot: int = 0
 	for s: int in 4:

@@ -73,13 +73,14 @@ func _physics_process(delta: float) -> void:
 		rotation = lerp_angle(rotation, _remote_rotation, blend)
 
 
-func host_take_damage(amount: int, attacker: int = 0) -> void:
+func host_take_damage(amount: int, attacker: int = 0) -> int:
 	if not multiplayer.is_server() or _state == State.DEAD:
-		return
+		return 0
 	if attacker > 0 and _state == State.IDLE:
 		_target_id = attacker
 		_acquire_delay_left = 0.0
 		_enter(State.CHASE)
+	var applied: int = mini(amount, _health)
 	_health = maxi(0, _health - amount)
 	_sync_hp.rpc(_health)
 	if _health == 0:
@@ -88,6 +89,7 @@ func host_take_damage(amount: int, attacker: int = 0) -> void:
 		_world.host_record_kill(attacker)
 		_world.host_drop_enemy_loot(global_position, 4)
 		print("[combat] %s crumbled" % name)
+	return applied
 
 
 func host_alert(focus: Vector2) -> void:
@@ -116,6 +118,10 @@ func host_full_sync_to(peer_id: int) -> void:
 func _run_ai(delta: float) -> void:
 	if _stun_left > 0.0:
 		_stun_left -= delta
+		if _stun_left <= 0.0 and _state == State.BURSTWAIT:
+			# Stun erased the cast bar (_stunned_fx stops it) while the burst
+			# clock froze — restart the telegraph for the time still owed.
+			_cast_fx.rpc(maxf(0.05, burst_delay - _state_time))
 		return
 	_trap_cd_left = maxf(0.0, _trap_cd_left - delta)
 	_state_time += delta
@@ -193,7 +199,9 @@ func _raise_walls() -> void:
 		var seg_pos: Vector2 = _ring_center \
 				+ Vector2.from_angle(TAU * float(i) / RingWalls.SEGMENTS) * ring_radius
 		for pawn: Player in _world.alive_pawns():
-			if pawn.global_position.distance_to(seg_pos) < 46.0:
+			# Segment half-length 64 + wall thickness 9 + pawn radius 13:
+			# anything under ~88 can pin or crush a standing player.
+			if pawn.global_position.distance_to(seg_pos) < 88.0:
 				mask |= 1 << i
 		if global_position.distance_to(seg_pos) < 60.0:
 			mask |= 1 << i  # he doesn't wall himself in half

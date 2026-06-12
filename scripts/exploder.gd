@@ -88,9 +88,10 @@ func _physics_process(delta: float) -> void:
 		rotation = lerp_angle(rotation, _remote_rotation, blend)
 
 
-func host_take_damage(amount: int, attacker: int = 0) -> void:
+func host_take_damage(amount: int, attacker: int = 0) -> int:
 	if not multiplayer.is_server() or _state == State.DEAD:
-		return
+		return 0
+	var applied: int = mini(amount, _health)
 	_health = maxi(0, _health - amount)
 	_sync_hp.rpc(_health)
 	if _health == 0:
@@ -100,6 +101,7 @@ func host_take_damage(amount: int, attacker: int = 0) -> void:
 		_world.host_record_kill(attacker)
 		_world.host_drop_enemy_loot(global_position, 2)
 		print("[combat] %s defused" % name)
+	return applied
 
 
 func host_stun(duration: float) -> void:
@@ -189,8 +191,8 @@ func _explode() -> void:
 	for pawn: Player in _world.alive_pawns():
 		if pawn.global_position.distance_to(global_position) > blast_radius + 12.0:
 			continue
-		if not _has_los(pawn.global_position):
-			continue  # blasts don't reach through walls — cover is cover
+		if not _world.blast_clear(global_position, pawn.global_position):
+			continue  # walls stop shrapnel — smoke does NOT
 		_world.host_damage_player(str(pawn.name).to_int(), blast_damage)
 	_world.host_alert_enemies(global_position, global_position, 400.0)
 	_boom_fx.rpc()

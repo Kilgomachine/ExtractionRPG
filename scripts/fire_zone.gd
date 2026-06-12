@@ -45,7 +45,9 @@ func setup_cone(origin: Vector2, dir_angle: float, fire_range: float,
 	duration = fire_duration
 	tick_interval = 0.125
 	tick_damage = 4  # flame = ~32 dps zone denial: intense, not unfair
-	_tick_left = tick_interval
+	# First tick delayed: a 640px jet can ignite from off-screen, so the burn
+	# starts a beat AFTER the flame appears — you see it before it bites.
+	_tick_left = 0.35
 
 
 func _ready() -> void:

@@ -37,6 +37,12 @@ func _ready() -> void:
 func _physics_process(delta: float) -> void:
 	_age += delta
 	if _age >= LIFETIME:
+		# Every peer self-despawns — release the searcher's dim locally too,
+		# or whoever was mid-search stays dimmed forever.
+		if _searcher_id != 0:
+			var searcher: Player = _world.pawn_for(_searcher_id)
+			if searcher != null and is_instance_valid(searcher):
+				searcher.set_searching(false)
 		queue_free()
 		return
 	if not _is_casting():
