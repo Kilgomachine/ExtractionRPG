@@ -70,12 +70,14 @@ func _process(delta: float) -> void:
 func _draw() -> void:
 	if not suction_active:
 		return
-	# Converging suction rings.
+	# The pull radius is unmistakable: filled disc + hard boundary + rings.
+	draw_circle(Vector2.ZERO, suck_range, Color(0.85, 0.4, 0.9, 0.10))
+	draw_arc(Vector2.ZERO, suck_range, 0.0, TAU, 56, Color(0.95, 0.55, 0.95, 0.85), 3.5)
 	var t: float = fposmod(Time.get_ticks_msec() * 0.001, 0.8) / 0.8
-	for i: int in 3:
-		var ring_t: float = fposmod(t + float(i) / 3.0, 1.0)
+	for i: int in 4:
+		var ring_t: float = fposmod(t + float(i) / 4.0, 1.0)
 		var r: float = suck_range * (1.0 - ring_t)
-		draw_arc(Vector2.ZERO, r, 0.0, TAU, 40, Color(0.9, 0.5, 0.9, 0.45 * ring_t), 2.0)
+		draw_arc(Vector2.ZERO, r, 0.0, TAU, 40, Color(0.9, 0.5, 0.9, 0.55 * ring_t), 2.5)
 
 
 func _physics_process(delta: float) -> void:

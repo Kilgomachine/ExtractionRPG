@@ -71,6 +71,10 @@ func _physics_process(delta: float) -> void:
 func host_take_damage(amount: int, attacker: int = 0) -> void:
 	if not multiplayer.is_server() or _state == State.DEAD:
 		return
+	if attacker > 0 and _state == State.IDLE:
+		_target_id = attacker  # getting shot IS awareness
+		_acquire_delay_left = 0.0
+		_enter(State.CHASE)
 	_health = maxi(0, _health - amount)
 	_sync_hp.rpc(_health)
 	if _health == 0:

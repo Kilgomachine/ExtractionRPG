@@ -13,7 +13,7 @@ enum State { IDLE, CHASE, FUSE, DEAD }
 @export var move_speed: float = 360.0
 @export var aggro_range: float = 320.0  # < camera half-height
 @export var fuse_range: float = 34.0
-@export var fuse_time: float = 0.4
+@export var fuse_time: float = 0.9  # generous final window — kill it or move
 @export var blast_radius: float = 187.0  # kill it or eat the hit
 @export var blast_damage: int = 60
 @export var respawn_delay: float = 12.0

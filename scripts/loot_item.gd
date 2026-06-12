@@ -14,8 +14,14 @@ const COLORS: Array[Color] = [
 	Color(0.9, 0.35, 0.2),    # frag grenade
 	Color(0.7, 0.75, 0.85),   # smoke grenade
 	Color(1.0, 0.95, 0.5),    # flashbang
+	Color(0.8, 0.8, 0.82),    # rifle
+	Color(0.75, 0.85, 0.75),  # smg
+	Color(0.85, 0.75, 0.65),  # shotgun
+	Color(0.5, 0.9, 1.0),     # laser
+	Color(0.45, 0.6, 0.8),    # small ammo pack
 ]
-const NAMES: Array[String] = ["Scrap", "Medkit", "Valuables", "Ammo", "Frag", "Smoke", "Flash"]
+const NAMES: Array[String] = ["Scrap", "Medkit", "Valuables", "Ammo", "Frag", "Smoke",
+		"Flash", "Rifle", "SMG", "Shotgun", "Laser", "Ammo (small)"]
 const HOVER_RADIUS: float = 16.0
 const PICKUP_RANGE: float = 90.0
 

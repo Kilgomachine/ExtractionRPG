@@ -33,23 +33,26 @@ const SPAWN_SPOTS: Array[Vector2] = [
 	Vector2(0, -40), Vector2(-40, 80), Vector2(-100, 0), Vector2(0, -120),
 ]
 
-@export var move_speed: float = 230.0
-@export var dodge_speed: float = 525.0  # -25%: dash covers ~84px now
+@export var move_speed: float = 195.0  # walking is deliberate; SHIFT is speed
+@export var dodge_speed: float = 525.0
 @export_range(0.05, 0.5) var dodge_duration: float = 0.16
-@export var dodge_cooldown: float = 0.9
+@export var dodge_cooldown: float = 0.15  # no real cooldown — stamina is the cost
+@export var dodge_stamina_cost: float = 30.0
 @export var remote_lerp_rate: float = 14.0
 
 var spawn_slot: int = 0
 var dead: bool = false
 var active_slot: int = 1
-var current_gun: int = 0  # index into Game.GUNS
+var equipped_gun: int = -1  # ITEM type of the equipped weapon (host-synced)
 var grenade_sel: int = 0  # 0 frag / 1 smoke / 2 flash
 var latched_count: int = 0  # huggers riding you
 
 var _displayed_hp: int = MAX_HEALTH
+var _displayed_shield: int = 0
 # Seeded with the starting kit (matches GameWorld._init_loadout).
-var _counts: PackedInt32Array = PackedInt32Array([0, 2, 0, 30, 1, 1, 1])
+var _counts: PackedInt32Array = PackedInt32Array([0, 2, 0, 30, 1, 1, 1, 1, 1, 1, 1])
 var _mags: PackedInt32Array = PackedInt32Array([8, 24, 4])
+var _shoot_slow_left: float = 0.0
 var _reload_pending: bool = false
 var _cast_kind: CastKind = CastKind.NONE
 var _cast_left: float = 0.0
@@ -186,17 +189,25 @@ func update_displayed_health(hp: int) -> void:
 		Game.play_sfx("heal", global_position)
 
 
-func update_loadout(counts: PackedInt32Array, mags: PackedInt32Array) -> void:
+func update_loadout(counts: PackedInt32Array, mags: PackedInt32Array, equipped: int) -> void:
 	# duplicate(): on the HOST, call_local passes host truth by reference.
-	var mag_rose: bool = current_gun < mags.size() and current_gun < _mags.size() \
-			and mags[current_gun] > _mags[current_gun]
+	var mag_idx: int = GameWorld.mag_index_for(equipped)
+	var mag_rose: bool = mag_idx >= 0 and mag_idx < mags.size() and mag_idx < _mags.size() \
+			and mags[mag_idx] > _mags[mag_idx]
 	_counts = counts.duplicate()
 	_mags = mags.duplicate()
+	equipped_gun = equipped
 	_reload_pending = false
 	if is_multiplayer_authority():
 		if mag_rose and _cast_kind == CastKind.RELOAD:
 			_cancel_cast()
 		_refresh_hud()
+
+
+## Shield arrives from the host like hp (fire bypasses it server-side).
+func update_displayed_shield(value: int) -> void:
+	_displayed_shield = value
+	_health_bar.set_shield(value, GameWorld.SHIELD_MAX)
 
 
 func set_searching(value: bool) -> void:
@@ -275,13 +286,9 @@ func _gather_input() -> Dictionary:
 func _handle_slots(input: Dictionary) -> void:
 	var slot: int = input["slot"]
 	if slot != 0:
-		if slot == active_slot:
-			# Re-press cycles within the slot (guns on 1, grenade type on 4).
-			if slot == 1:
-				current_gun = (current_gun + 1) % Game.GUNS.size()
-			elif slot == 4:
-				grenade_sel = (grenade_sel + 1) % Game.GRENADES.size()
-		else:
+		if slot == active_slot and slot == 4:
+			grenade_sel = (grenade_sel + 1) % Game.GRENADES.size()  # cycle grenade type
+		elif slot != active_slot:
 			active_slot = slot
 			_cancel_cast()
 		_refresh_hud()
@@ -299,7 +306,9 @@ func _apply_movement(input: Dictionary, delta: float) -> void:
 	var aim: Vector2 = input["aim"]
 	if aim.length_squared() > 4.0:
 		_last_aim = aim.normalized()
-	if input["dodge"] and _dodge_cooldown_left == 0.0:
+	if input["dodge"] and _dodge_cooldown_left == 0.0 and _stamina >= dodge_stamina_cost:
+		_stamina -= dodge_stamina_cost  # the dash bill is paid in stamina now
+		_stamina_delay = STAMINA_REGEN_DELAY
 		_cancel_cast()
 		_charm_left = 0.0  # dashing snaps you out of the Siren's trance
 		_charm_source = ""
@@ -335,16 +344,19 @@ func _apply_movement(input: Dictionary, delta: float) -> void:
 			speed *= 0.7  # reload is a lighter commitment
 		elif busy:
 			speed *= 0.3
+		_shoot_slow_left = maxf(0.0, _shoot_slow_left - delta)
+		if _shoot_slow_left > 0.0:
+			speed *= 0.6  # firing plants your feet for a beat
 		if latched_count > 0:
 			speed *= pow(0.65, latched_count)  # huggers drag you down
-		# Charmed: your own feet betray you and walk toward the song.
+		# Charmed: you SPRINT to her, smitten, weapon already in the dirt.
 		_charm_left = maxf(0.0, _charm_left - delta)
 		if _charm_left > 0.0:
 			var siren: Node2D = _find_charm_source()
 			if siren != null:
 				move = (siren.global_position - global_position).normalized()
-				speed = move_speed * 0.6
-				_running = false
+				speed = move_speed * SPRINT_FACTOR
+				_running = true
 			else:
 				_charm_left = 0.0
 		velocity = move * speed
@@ -392,9 +404,9 @@ func _advance_cast(delta: float) -> void:
 		CastKind.RELOAD:
 			_reload_pending = true
 			if multiplayer.is_server():
-				_world.host_handle_reload(1, current_gun)
+				_world.host_handle_reload(1, equipped_gun)
 			else:
-				_world._request_reload.rpc_id(1, current_gun)
+				_world._request_reload.rpc_id(1, equipped_gun)
 		CastKind.LASER:
 			var direction: Vector2 = _last_aim
 			if multiplayer.is_server():
@@ -419,8 +431,11 @@ func _cancel_cast() -> void:
 func _try_start_reload() -> void:
 	if _cast_kind != CastKind.NONE or _searching or _world == null or _reload_pending:
 		return
-	var gun: Dictionary = Game.GUNS[current_gun]
-	if _mags[current_gun] >= int(gun["mag"]) or _counts[GameWorld.ITEM_AMMO] <= 0:
+	var mag_idx: int = GameWorld.mag_index_for(equipped_gun)
+	if mag_idx < 0:
+		return  # no mag weapon equipped
+	var spec: Dictionary = GameWorld.gun_spec(equipped_gun)
+	if _mags[mag_idx] >= int(spec["mag"]) or _counts[GameWorld.ITEM_AMMO] <= 0:
 		return
 	_start_cast(CastKind.RELOAD, RELOAD_CAST_TIME, Color(0.55, 0.75, 1.0))
 
@@ -446,28 +461,31 @@ func _handle_fire(input: Dictionary, delta: float) -> void:
 		return  # too busy swooning to shoot
 	match active_slot:
 		1:
-			if _fire_cooldown_left > 0.0:
+			if equipped_gun == -1 or _fire_cooldown_left > 0.0:
 				return
-			if _mags[current_gun] <= 0:
+			if equipped_gun == GameWorld.ITEM_LASER:
+				if input["fire_pressed"] and _counts[GameWorld.ITEM_AMMO] >= GameWorld.LASER_AMMO_COST:
+					_start_cast(CastKind.LASER, LASER_CHARGE_TIME, Color(0.5, 0.9, 1.0))
+				return
+			var mag_idx: int = GameWorld.mag_index_for(equipped_gun)
+			if _mags[mag_idx] <= 0:
 				_try_start_reload()
 				return
 			var aim: Vector2 = input["aim"]
 			if aim.length_squared() < 4.0:
 				return
-			var gun: Dictionary = Game.GUNS[current_gun]
-			_fire_cooldown_left = float(gun["interval_ms"]) / 1000.0
+			var spec: Dictionary = GameWorld.gun_spec(equipped_gun)
+			_fire_cooldown_left = float(spec["interval_ms"]) / 1000.0
+			_shoot_slow_left = 0.3  # firing plants your feet
 			var direction: Vector2 = aim.normalized()
 			if multiplayer.is_server():
-				_world.host_handle_fire(1, direction, current_gun)
+				_world.host_handle_fire(1, direction, equipped_gun)
 			else:
-				_world._request_fire.rpc_id(1, direction, current_gun)
+				_world._request_fire.rpc_id(1, direction, equipped_gun)
 		2:
 			if input["fire_pressed"] and _counts[GameWorld.ITEM_MEDKIT] > 0 \
 					and _displayed_hp < MAX_HEALTH:
 				_start_cast(CastKind.HEAL, HEAL_CAST_TIME, Color(0.45, 0.9, 0.55))
-		3:
-			if input["fire_pressed"] and _counts[GameWorld.ITEM_AMMO] >= GameWorld.LASER_AMMO_COST:
-				_start_cast(CastKind.LASER, LASER_CHARGE_TIME, Color(0.5, 0.9, 1.0))
 		4:
 			if input["fire_pressed"]:
 				var item_type: int = GameWorld.ITEM_FRAG + grenade_sel
@@ -486,22 +504,24 @@ func _handle_interact(input: Dictionary) -> void:
 		return
 	if _cast_kind != CastKind.NONE:
 		return
-	var nearest: Locker = null
+	# Lockers AND corpses share the search interface (duck-typed group).
+	var nearest: Node2D = null
 	var nearest_dist: float = Locker.SEARCH_RANGE
 	for node: Node in get_tree().get_nodes_in_group(&"lockers"):
-		var locker := node as Locker
-		if locker == null or not locker.can_search():
+		var searchable := node as Node2D
+		if searchable == null or not node.has_method(&"can_search") \
+				or not bool(node.call(&"can_search")):
 			continue
-		var dist: float = locker.global_position.distance_to(global_position)
+		var dist: float = searchable.global_position.distance_to(global_position)
 		if dist <= nearest_dist:
 			nearest_dist = dist
-			nearest = locker
+			nearest = searchable
 	if nearest == null:
 		return
 	if multiplayer.is_server():
-		nearest.host_request_search(1)
+		nearest.call(&"host_request_search", 1)
 	else:
-		nearest._request_search.rpc_id(1)
+		nearest.rpc_id(1, &"_request_search")
 
 
 func _find_charm_source() -> Node2D:
@@ -528,17 +548,22 @@ func _hovered_loot_in_range() -> LootItem:
 func _refresh_hud() -> void:
 	if _world == null:
 		return
-	var gun: Dictionary = Game.GUNS[current_gun]
+	var weapon_text: String = "(no weapon — B to equip)"
+	if equipped_gun == GameWorld.ITEM_LASER:
+		weapon_text = "Laser (%d ammo)" % GameWorld.LASER_AMMO_COST
+	elif equipped_gun != -1:
+		var spec: Dictionary = GameWorld.gun_spec(equipped_gun)
+		weapon_text = "%s %d/%d" % [spec["name"],
+				_mags[GameWorld.mag_index_for(equipped_gun)], _counts[GameWorld.ITEM_AMMO]]
 	var slots: Array[String] = [
-		"[1] %s %d/%d" % [gun["name"], _mags[current_gun], _counts[GameWorld.ITEM_AMMO]],
+		"[1] " + weapon_text,
 		"[2] Medkit ×%d" % _counts[GameWorld.ITEM_MEDKIT],
-		"[3] Laser (%d ammo)" % GameWorld.LASER_AMMO_COST,
+		"[3] —",
 		"[4] %s ×%d" % [Game.GRENADES[grenade_sel], _counts[GameWorld.ITEM_FRAG + grenade_sel]],
 	]
 	slots[active_slot - 1] = "▶" + slots[active_slot - 1]
 	_world.update_quickbar("   ".join(slots))
-	_world.update_backpack("Scrap ×%d · Medkit ×%d · Valuables ×%d · Ammo ×%d · Frag ×%d · Smoke ×%d · Flash ×%d" % [
-		_counts[0], _counts[1], _counts[2], _counts[3], _counts[4], _counts[5], _counts[6]])
+	_world.refresh_bag(_counts, equipped_gun)
 
 
 # --- visuals / replication -------------------------------------------------------

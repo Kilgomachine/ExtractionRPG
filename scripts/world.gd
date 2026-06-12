@@ -12,7 +12,7 @@ const ENEMY_PROJECTILE_DAMAGE: int = 10
 const RESPAWN_SECONDS: float = 3.0
 const HEAL_AMOUNT: int = 40
 const HEAL_INTERVAL_MS: int = 500
-const TEAM_SIGHT_RANGE: float = 560.0
+const TEAM_SIGHT_RANGE: float = 500.0
 const HEARING_RANGE: float = 380.0
 
 # Item types (indices into a loadout counts array).
@@ -23,10 +23,19 @@ const ITEM_AMMO: int = 3
 const ITEM_FRAG: int = 4
 const ITEM_SMOKE: int = 5
 const ITEM_FLASH: int = 6
-const ITEM_TYPES: int = 7
+const ITEM_RIFLE: int = 7
+const ITEM_SMG: int = 8
+const ITEM_SHOTGUN: int = 9
+const ITEM_LASER: int = 10
+const ITEM_AMMO_SMALL: int = 11  # enemy drops: half a case
+const ITEM_TYPES: int = 12
 const AMMO_PER_PICKUP: int = 6
+const AMMO_SMALL_PICKUP: int = 3
 const START_MEDKITS: int = 2
 const START_RESERVE: int = 30
+const SHIELD_MAX: int = 40
+const SHIELD_REGEN: float = 8.0  # per second, after the delay
+const SHIELD_DELAY: float = 3.0
 const LASER_AMMO_COST: int = 2
 const LASER_DAMAGE: int = 30
 const LASER_MAX_RANGE: float = 900.0
@@ -36,9 +45,28 @@ const SMOKE_RADIUS: float = 90.0
 const SMOKE_DURATION: float = 7.0
 const FLASH_RADIUS: float = 160.0
 const FLASH_STUN: float = 2.5
-# Locker rolls (grenades are rare); enemies drop ammo-heavy loot.
-const LOOT_POOL: Array[int] = [0, 0, 1, 1, 2, 2, 3, 3, 3, 4, 5, 6]
-const LOOT_POOL_ENEMY: Array[int] = [3, 3, 3, 3, 0, 1, 2]
+
+# Gun specs keyed by ITEM type. The laser is special-cased (charge weapon).
+const GUN_SPECS: Dictionary[int, Dictionary] = {
+	7: {"name": "Rifle", "mag": 8, "dmg": 12, "interval_ms": 280, "pellets": 1, "spread_deg": 0.0, "sfx": "shot", "mag_index": 0},
+	8: {"name": "SMG", "mag": 24, "dmg": 6, "interval_ms": 110, "pellets": 1, "spread_deg": 5.0, "sfx": "shot_smg", "mag_index": 1},
+	9: {"name": "Shotgun", "mag": 4, "dmg": 8, "interval_ms": 900, "pellets": 5, "spread_deg": 11.0, "sfx": "shot_shotgun", "mag_index": 2},
+}
+
+# Locker rolls (grenades uncommon, guns RARE — rarer than ammo).
+const LOOT_POOL: Array[int] = [0, 0, 1, 1, 2, 2, 3, 3, 3, 4, 5, 6, 0, 1, 2, 3, 3, 4, 5, 6, 7, 8, 9, 10]
+# Corpse loot: small ammo packs, no guns.
+const LOOT_POOL_ENEMY: Array[int] = [11, 11, 11, 0, 1, 2]
+
+
+static func gun_spec(item_type: int) -> Dictionary:
+	return GUN_SPECS.get(item_type, {})
+
+
+static func mag_index_for(item_type: int) -> int:
+	if GUN_SPECS.has(item_type):
+		return int(GUN_SPECS[item_type]["mag_index"])
+	return -1
 
 const FLOOR_COLOR := Color(0.21, 0.215, 0.235)
 const WALL_COLOR := Color(0.42, 0.40, 0.37)
@@ -102,8 +130,12 @@ var _spawned_ids: Array[int] = []
 var _slots: Dictionary[int, int] = {}
 var _next_slot: int = 1
 var _player_hp: Dictionary[int, int] = {}
+var _player_shield: Dictionary[int, float] = {}
+var _shield_delay: Dictionary[int, float] = {}
 var _loadouts: Dictionary[int, PackedInt32Array] = {}
 var _mags: Dictionary[int, PackedInt32Array] = {}  # per-gun magazines
+var _equipped: Dictionary[int, int] = {}  # peer id -> equipped gun ITEM type (-1 none)
+var _next_corpse: int = 0
 var _stats: Dictionary[int, PackedInt32Array] = {}  # kills, dmg, pkills, deaths
 var _names: Dictionary[int, String] = {}
 var _fire_ready_at: Dictionary[int, int] = {}
@@ -124,7 +156,6 @@ var _local_pawn: Player
 @onready var _smokes: Node2D = $Smokes
 @onready var _quick_bar: Label = $Hud/QuickBar
 @onready var _bag_panel: PanelContainer = $Hud/BagPanel
-@onready var _backpack_label: Label = $Hud/BagPanel/Backpack
 @onready var _stamina_fill: ColorRect = $Hud/StaminaFill
 @onready var _scoreboard: PanelContainer = $Hud/Scoreboard
 @onready var _score_label: Label = $Hud/Scoreboard/Scores
@@ -175,6 +206,16 @@ func _physics_process(delta: float) -> void:
 		for pawn: Player in alive_pawns():
 			if pawn.is_running():
 				host_alert_enemies(pawn.global_position, pawn.global_position, HEARING_RANGE)
+	# Shields regenerate after a quiet spell (fire bypasses them entirely).
+	for id: int in _player_shield:
+		_shield_delay[id] = maxf(0.0, float(_shield_delay.get(id, 0.0)) - delta)
+		if _shield_delay[id] == 0.0 and _player_shield[id] < float(SHIELD_MAX) \
+				and _player_hp.get(id, 0) > 0:
+			_player_shield[id] = minf(float(SHIELD_MAX), _player_shield[id] + SHIELD_REGEN * delta)
+			var whole: int = int(_player_shield[id])
+			var pawn := pawn_for(id)
+			if pawn != null and whole != pawn._displayed_shield:
+				_sync_shield.rpc(id, whole)
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -215,14 +256,20 @@ func local_pawn() -> Player:
 	return null
 
 
-## Vision is PERSONAL now — each peer sees only what their own pawn can see.
+## Vision is PERSONAL — each peer sees only what their own pawn can see.
+## Strict: the center ray AND a flanking ray must both clear, which kills the
+## one-pixel corner squeezes that revealed enemies through walls.
 func sees_point(point: Vector2) -> bool:
 	var pawn: Player = local_pawn()
 	if pawn == null or pawn.dead:
 		return false
-	if pawn.global_position.distance_to(point) > TEAM_SIGHT_RANGE:
+	var eye: Vector2 = pawn.global_position
+	if eye.distance_to(point) > TEAM_SIGHT_RANGE:
 		return false
-	return sight_clear(pawn.global_position, point)
+	if not sight_clear(eye, point):
+		return false
+	var side: Vector2 = (point - eye).orthogonal().normalized() * 7.0
+	return sight_clear(eye, point + side) or sight_clear(eye, point - side)
 
 
 ## Line of sight: blocked by walls AND smoke clouds.
@@ -336,8 +383,11 @@ func _local_despawn(id: int) -> void:
 func _on_peer_disconnected(id: int) -> void:
 	_spawned_ids.erase(id)
 	_player_hp.erase(id)
+	_player_shield.erase(id)
+	_shield_delay.erase(id)
 	_loadouts.erase(id)
 	_mags.erase(id)
+	_equipped.erase(id)
 	_stats.erase(id)
 	_names.erase(id)
 	_fire_ready_at.erase(id)
@@ -409,10 +459,6 @@ func update_quickbar(text: String) -> void:
 	_quick_bar.text = text
 
 
-func update_backpack(text: String) -> void:
-	_backpack_label.text = text
-
-
 func update_stamina(pct: float) -> void:
 	_stamina_fill.size.x = 180.0 * clampf(pct, 0.0, 1.0)
 
@@ -421,10 +467,56 @@ func toggle_bag() -> void:
 	_bag_panel.visible = not _bag_panel.visible
 
 
+## Rebuild the bag rows: name ×count [Equip] [Drop].
+func refresh_bag(counts: PackedInt32Array, equipped: int) -> void:
+	var list := $Hud/BagPanel/Items as VBoxContainer
+	for child: Node in list.get_children():
+		child.queue_free()
+	var header := Label.new()
+	header.text = "BACKPACK  (B to close)"
+	list.add_child(header)
+	for item_type: int in counts.size():
+		if counts[item_type] <= 0:
+			continue
+		var row := HBoxContainer.new()
+		var label := Label.new()
+		var item_name: String = LootItem.NAMES[item_type] if item_type < LootItem.NAMES.size() else "?"
+		var is_gun: bool = GUN_SPECS.has(item_type) or item_type == ITEM_LASER
+		label.text = "%s ×%d%s" % [item_name, counts[item_type],
+				"   [equipped]" if is_gun and item_type == equipped else ""]
+		label.custom_minimum_size.x = 220
+		row.add_child(label)
+		if is_gun and item_type != equipped:
+			var equip := Button.new()
+			equip.text = "Equip"
+			equip.pressed.connect(_ui_equip.bind(item_type))
+			row.add_child(equip)
+		var drop := Button.new()
+		drop.text = "Drop"
+		drop.pressed.connect(_ui_drop.bind(item_type))
+		row.add_child(drop)
+		list.add_child(row)
+
+
+func _ui_equip(item_type: int) -> void:
+	if multiplayer.is_server():
+		host_handle_equip(1, item_type)
+	else:
+		_request_equip.rpc_id(1, item_type)
+
+
+func _ui_drop(item_type: int) -> void:
+	if multiplayer.is_server():
+		host_handle_drop(1, item_type)
+	else:
+		_request_drop.rpc_id(1, item_type)
+
+
 # --- combat: hp, damage, death -------------------------------------------------------
 
 ## The single place player damage is decided. source > 0 = another player (FF).
-func host_damage_player(id: int, amount: int, source: int = 0) -> void:
+## pierce_shield: fire damage ignores shields entirely.
+func host_damage_player(id: int, amount: int, source: int = 0, pierce_shield: bool = false) -> void:
 	if not multiplayer.is_server() or not _player_hp.has(id) or _player_hp[id] <= 0:
 		return
 	var pawn := pawn_for(id)
@@ -432,6 +524,16 @@ func host_damage_player(id: int, amount: int, source: int = 0) -> void:
 		return
 	if pawn.is_invulnerable():
 		return
+	_shield_delay[id] = SHIELD_DELAY
+	if not pierce_shield:
+		var shield: float = float(_player_shield.get(id, 0.0))
+		var absorbed: float = minf(shield, float(amount))
+		if absorbed > 0.0:
+			_player_shield[id] = shield - absorbed
+			amount -= int(absorbed)
+			_sync_shield.rpc(id, int(_player_shield[id]))
+		if amount <= 0:
+			return
 	_player_hp[id] = maxi(0, _player_hp[id] - amount)
 	_sync_player_hp.rpc(id, _player_hp[id])
 	if source > 0 and source != id and _stats.has(source):
@@ -483,32 +585,103 @@ func _player_respawned(id: int) -> void:
 		pawn.respawn_to_slot()
 
 
+@rpc("authority", "call_local", "reliable")
+func _sync_shield(id: int, value: int) -> void:
+	var pawn := pawn_for(id)
+	if pawn != null:
+		pawn.update_displayed_shield(value)
+
+
 # --- loadout -------------------------------------------------------------------------
 
 func _init_loadout(id: int) -> void:
-	var counts := PackedInt32Array([0, 0, 0, 0, 0, 0, 0])
+	var counts := PackedInt32Array()
+	counts.resize(ITEM_TYPES)
 	counts[ITEM_MEDKIT] = START_MEDKITS
 	counts[ITEM_AMMO] = START_RESERVE
 	counts[ITEM_FRAG] = 1
 	counts[ITEM_SMOKE] = 1
 	counts[ITEM_FLASH] = 1
+	# Testing kit: every weapon in the bag (equip via B).
+	counts[ITEM_RIFLE] = 1
+	counts[ITEM_SMG] = 1
+	counts[ITEM_SHOTGUN] = 1
+	counts[ITEM_LASER] = 1
 	_loadouts[id] = counts
-	var mags := PackedInt32Array()
-	for gun: Dictionary in Game.GUNS:
-		mags.append(int(gun["mag"]))
-	_mags[id] = mags
+	_mags[id] = PackedInt32Array([8, 24, 4])
+	_equipped[id] = ITEM_RIFLE
+	_player_shield[id] = float(SHIELD_MAX)
+	_shield_delay[id] = 0.0
+	_sync_shield.rpc(id, SHIELD_MAX)
 	_push_loadout(id)
 
 
 func _push_loadout(id: int) -> void:
-	_sync_loadout.rpc(id, _loadouts[id], _mags[id])
+	_sync_loadout.rpc(id, _loadouts[id], _mags[id], _equipped[id])
 
 
 @rpc("authority", "call_local", "reliable")
-func _sync_loadout(id: int, counts: PackedInt32Array, mags: PackedInt32Array) -> void:
+func _sync_loadout(id: int, counts: PackedInt32Array, mags: PackedInt32Array, equipped: int) -> void:
 	var pawn := pawn_for(id)
 	if pawn != null:
-		pawn.update_loadout(counts, mags)
+		pawn.update_loadout(counts, mags, equipped)
+
+
+# --- equip / drop ---------------------------------------------------------------
+
+@rpc("any_peer", "call_remote", "reliable")
+func _request_equip(item_type: int) -> void:
+	if multiplayer.is_server():
+		host_handle_equip(multiplayer.get_remote_sender_id(), item_type)
+
+
+func host_handle_equip(id: int, item_type: int) -> void:
+	if not multiplayer.is_server() or not _loadouts.has(id) or _player_hp.get(id, 0) <= 0:
+		return
+	if not (GUN_SPECS.has(item_type) or item_type == ITEM_LASER):
+		return
+	if _loadouts[id][item_type] <= 0:
+		return
+	_equipped[id] = item_type
+	_push_loadout(id)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func _request_drop(item_type: int) -> void:
+	if multiplayer.is_server():
+		host_handle_drop(multiplayer.get_remote_sender_id(), item_type)
+
+
+func host_handle_drop(id: int, item_type: int) -> void:
+	if not multiplayer.is_server() or not _loadouts.has(id) or _player_hp.get(id, 0) <= 0:
+		return
+	if item_type < 0 or item_type >= ITEM_TYPES or _loadouts[id][item_type] <= 0:
+		return
+	var pawn := pawn_for(id)
+	if pawn == null:
+		return
+	_loadouts[id][item_type] -= 1
+	if _loadouts[id][item_type] <= 0 and _equipped.get(id, -1) == item_type:
+		_equipped[id] = -1  # dropped the gun in your hands
+	_push_loadout(id)
+	_next_loot += 1
+	_spawn_loot.rpc(_next_loot, item_type, pawn.global_position + Vector2.from_angle(randf() * TAU) * 24.0)
+
+
+## The Siren's doing: your weapon hits the dirt at your feet.
+func host_force_drop_gun(id: int) -> void:
+	if not multiplayer.is_server() or not _loadouts.has(id):
+		return
+	var gun: int = _equipped.get(id, -1)
+	if gun == -1 or _loadouts[id][gun] <= 0:
+		return
+	_loadouts[id][gun] -= 1
+	_equipped[id] = -1
+	_push_loadout(id)
+	var pawn := pawn_for(id)
+	if pawn != null:
+		_next_loot += 1
+		_spawn_loot.rpc(_next_loot, gun, pawn.global_position + Vector2.from_angle(randf() * TAU) * 20.0)
 
 
 @rpc("any_peer", "call_remote", "reliable")
@@ -543,13 +716,13 @@ func _request_reload(gun: int) -> void:
 func host_handle_reload(id: int, gun: int) -> void:
 	if not multiplayer.is_server() or not _loadouts.has(id) or _player_hp.get(id, 0) <= 0:
 		return
-	if gun < 0 or gun >= Game.GUNS.size():
+	if not GUN_SPECS.has(gun) or _equipped.get(id, -1) != gun:
 		return
-	var mag_size: int = int(Game.GUNS[gun]["mag"])
-	var take: int = mini(mag_size - _mags[id][gun], _loadouts[id][ITEM_AMMO])
+	var idx: int = mag_index_for(gun)
+	var take: int = mini(int(GUN_SPECS[gun]["mag"]) - _mags[id][idx], _loadouts[id][ITEM_AMMO])
 	if take <= 0:
 		return
-	_mags[id][gun] += take
+	_mags[id][idx] += take
 	_loadouts[id][ITEM_AMMO] -= take
 	_push_loadout(id)
 
@@ -565,20 +738,23 @@ func _request_fire(direction: Vector2, gun: int) -> void:
 func host_handle_fire(id: int, direction: Vector2, gun: int) -> void:
 	if not multiplayer.is_server() or not _player_hp.has(id) or _player_hp[id] <= 0:
 		return
-	if gun < 0 or gun >= Game.GUNS.size():
+	if not GUN_SPECS.has(gun) or _equipped.get(id, -1) != gun:
 		return
 	var pawn := pawn_for(id)
 	if pawn == null or direction == Vector2.ZERO:
 		return
-	if _mags[id][gun] <= 0:
+	var idx: int = mag_index_for(gun)
+	if _mags[id][idx] <= 0:
 		return
-	var spec: Dictionary = Game.GUNS[gun]
+	var spec: Dictionary = GUN_SPECS[gun]
 	var now: int = Time.get_ticks_msec()
 	if now < int(_fire_ready_at.get(id, 0)):
 		return
 	_fire_ready_at[id] = now + int(spec["interval_ms"]) - 15  # small lag tolerance
-	_mags[id][gun] -= 1
+	_mags[id][idx] -= 1
 	_push_loadout(id)
+	# Gunfire is LOUD — everything nearby gets suspicious.
+	host_alert_enemies(pawn.global_position, pawn.global_position, 600.0)
 	var dir: Vector2 = direction.normalized()
 	var pellets: int = int(spec["pellets"])
 	var spread: float = deg_to_rad(float(spec["spread_deg"]))
@@ -655,8 +831,11 @@ func host_handle_laser(id: int, direction: Vector2) -> void:
 	var pawn := pawn_for(id)
 	if pawn == null:
 		return
+	if _equipped.get(id, -1) != ITEM_LASER:
+		return
 	_loadouts[id][ITEM_AMMO] -= LASER_AMMO_COST
 	_push_loadout(id)
+	host_alert_enemies(pawn.global_position, pawn.global_position, 600.0)
 	var from: Vector2 = pawn.global_position
 	var dir: Vector2 = direction.normalized()
 	# Beam stops at the first wall — never through cover.
@@ -833,8 +1012,24 @@ func host_spawn_locker_loot(at: Vector2) -> void:
 		_spawn_loot.rpc(_next_loot, LOOT_POOL[randi() % LOOT_POOL.size()], _scatter_point(at))
 
 
-## Enemies drop loot too (ammo-heavy pool).
+## Dead enemies leave a lootable CORPSE (same two-step search as lockers).
 func host_drop_enemy_loot(at: Vector2, count: int) -> void:
+	if not multiplayer.is_server():
+		return
+	_next_corpse += 1
+	_spawn_corpse.rpc(_next_corpse, at, count)
+
+
+@rpc("authority", "call_local", "reliable")
+func _spawn_corpse(cid: int, at: Vector2, count: int) -> void:
+	var corpse := Corpse.new()
+	corpse.name = "c%d" % cid
+	corpse.setup(at, count)
+	$Corpses.add_child(corpse)
+
+
+## Called by a Corpse when its retrieve completes (host only).
+func host_corpse_loot(at: Vector2, count: int) -> void:
 	if not multiplayer.is_server():
 		return
 	for i: int in count:
@@ -880,8 +1075,14 @@ func host_request_pickup(player_id: int, loot_id: int) -> void:
 		return
 	if not _loadouts.has(player_id):
 		return
-	var gain: int = AMMO_PER_PICKUP if item.loot_type == ITEM_AMMO else 1
-	_loadouts[player_id][item.loot_type] += gain
+	var gain: int = 1
+	var store_as: int = item.loot_type
+	if item.loot_type == ITEM_AMMO:
+		gain = AMMO_PER_PICKUP
+	elif item.loot_type == ITEM_AMMO_SMALL:
+		gain = AMMO_SMALL_PICKUP
+		store_as = ITEM_AMMO  # small packs pour into the same reserve
+	_loadouts[player_id][store_as] += gain
 	_push_loadout(player_id)
 	print("[loot] player %d picked up %s (+%d)" % [player_id, item.display_name(), gain])
 	_despawn_loot.rpc(loot_id)

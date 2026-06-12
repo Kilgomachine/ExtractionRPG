@@ -196,6 +196,9 @@ func _resolve_song() -> void:
 			charmed.append(str(pawn.name).to_int())
 	if not charmed.is_empty():
 		_charm.rpc(charmed, charm_duration)
+		# Smitten hands can't hold a weapon — it drops at their feet.
+		for id: int in charmed:
+			_world.host_force_drop_gun(id)
 
 
 func _pick_target() -> int:

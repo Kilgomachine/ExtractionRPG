@@ -13,9 +13,13 @@ var duration: float = 4.0
 var cone: bool = false
 var direction: float = 0.0
 var half_angle_deg: float = 32.0
-# The Igniter's cone is LETHAL (x4 damage at x4 rate); death fires stay mild.
+# Flame DoT — death fires mild, cones denser ticks. Fire BYPASSES shields.
 var tick_interval: float = 0.5
-var tick_damage: int = 8
+var tick_damage: int = 2
+# Optional safe cone (the Chamber's escape pocket): no damage inside it.
+var safe_cone: bool = false
+var safe_direction: float = 0.0
+var safe_half_angle_deg: float = 40.0
 
 var _elapsed: float = 0.0
 var _tick_left: float = 0.5
@@ -40,7 +44,7 @@ func setup_cone(origin: Vector2, dir_angle: float, fire_range: float,
 	half_angle_deg = half_deg
 	duration = fire_duration
 	tick_interval = 0.125
-	tick_damage = 16  # halved from 32 after playtest — still ~128 dps
+	tick_damage = 4  # flame = ~32 dps zone denial: intense, not unfair
 	_tick_left = tick_interval
 
 
@@ -77,7 +81,7 @@ func _physics_process(delta: float) -> void:
 	_tick_left = tick_interval
 	for pawn: Player in _world.alive_pawns():
 		if _covers(pawn.global_position):
-			_world.host_damage_player(str(pawn.name).to_int(), tick_damage)
+			_world.host_damage_player(str(pawn.name).to_int(), tick_damage, 0, true)  # pierces shields
 
 
 func _covers(point: Vector2) -> bool:
@@ -86,6 +90,8 @@ func _covers(point: Vector2) -> bool:
 		return false
 	if cone and absf(angle_difference(to_point.angle(), direction)) > deg_to_rad(half_angle_deg) + 0.06:
 		return false
+	if safe_cone and absf(angle_difference(to_point.angle(), safe_direction)) <= deg_to_rad(safe_half_angle_deg):
+		return false  # the Chamber's mercy pocket
 	# Flame does not go through walls.
 	var space := get_world_2d().direct_space_state
 	var query := PhysicsRayQueryParameters2D.create(global_position, point, 1)
@@ -131,3 +137,11 @@ func _draw() -> void:
 	else:
 		draw_circle(Vector2.ZERO, radius, Color(1.0, 0.42, 0.1, pulse * fade))
 		draw_arc(Vector2.ZERO, radius - 2.0, 0.0, TAU, 40, Color(1.0, 0.6, 0.2, 0.7 * fade), 2.5)
+		if safe_cone:
+			# Show the safe pocket clearly — survival is a read, not a guess.
+			var half_rad: float = deg_to_rad(safe_half_angle_deg)
+			var pts := PackedVector2Array([Vector2.ZERO])
+			for i: int in 9:
+				var a: float = safe_direction - half_rad + (2.0 * half_rad) * (float(i) / 8.0)
+				pts.append(Vector2.from_angle(a) * radius)
+			draw_colored_polygon(pts, Color(0.2, 0.5, 0.3, 0.5 * fade))

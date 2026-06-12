@@ -81,6 +81,10 @@ func _physics_process(delta: float) -> void:
 func host_take_damage(amount: int, attacker: int = 0) -> void:
 	if not multiplayer.is_server() or _state == State.DEAD:
 		return
+	if attacker > 0 and _state == State.IDLE:
+		_target_id = attacker  # getting shot IS awareness
+		_acquire_delay_left = 0.0
+		_enter(State.CHASE)
 	_health = maxi(0, _health - amount)
 	_sync_hp.rpc(_health)
 	if _health == 0:
@@ -181,6 +185,12 @@ func _run_ai(delta: float) -> void:
 				_enter(State.CAST)
 				_cast.rpc(cast_time)
 		State.CAST:
+			# Tracks you during the charge (limited turn rate) — commit your
+			# sidestep LATE, not the moment the cast starts.
+			var tracked: Player = _world.pawn_for(_target_id)
+			if tracked != null and not tracked.dead:
+				var desired: float = (tracked.global_position - global_position).angle()
+				rotation = rotate_toward(rotation, desired, 1.4 * delta)
 			if _state_time >= cast_time:
 				_cast_cd_left = cast_cooldown
 				_world.host_spawn_flame_cone(global_position, rotation,

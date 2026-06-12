@@ -30,6 +30,7 @@ var _patrol_timeout: float = 0.0
 var _target_id: int = 0
 var _last_seen := Vector2.INF
 var _lost_sight_for: float = 0.0
+var _no_shot_for: float = 0.0
 var _acquire_delay_left: float = 0.0
 var _stun_left: float = 0.0
 var _post_root_left: float = 0.0
@@ -91,6 +92,14 @@ func host_alert(focus: Vector2) -> void:
 func host_take_damage(amount: int, attacker: int = 0) -> void:
 	if not multiplayer.is_server() or _dead:
 		return
+	if attacker > 0:
+		# Getting shot IS awareness — turn on the shooter immediately.
+		_target_id = attacker
+		_acquire_delay_left = 0.0
+		_no_shot_for = 0.0
+		var aggressor: Player = _world.pawn_for(attacker)
+		if aggressor != null:
+			_last_seen = aggressor.global_position
 	_health = maxi(0, _health - amount)
 	_sync_hp.rpc(_health)
 	if _health == 0:
@@ -194,9 +203,16 @@ func _hunt(target: Player, delta: float) -> void:
 		rotation = to_goal.angle()
 	elif has_sight:
 		rotation = to_target.angle()
+	# Can't get a shot off for a while? Lose interest — you've shaken it.
+	_no_shot_for += delta
+	if _no_shot_for > 2.5:
+		_target_id = 0
+		_no_shot_for = 0.0
+		return
 	# Take the shot: rooted, telegraphed, range-capped (off-screen rule).
 	if has_sight and _cooldown_left == 0.0 and _acquire_delay_left == 0.0 \
 			and to_target.length() <= alert_range:
+		_no_shot_for = 0.0
 		_aim_left = aim_time
 		_cooldown_left = fire_interval
 		_windup.rpc()
