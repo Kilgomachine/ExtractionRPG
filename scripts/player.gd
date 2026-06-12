@@ -134,6 +134,14 @@ func _physics_process(delta: float) -> void:
 		rotation = lerp_angle(rotation, _remote_rotation, blend)
 		_apply_dodge_visual(_remote_dodging)
 		_emit_trail(delta, _remote_running)
+		# Teammates are NOT wallhacks: hidden unless your pawn has line of sight.
+		_vis_poll_left -= delta
+		if _vis_poll_left <= 0.0:
+			_vis_poll_left = 0.1
+			visible = not dead and _world != null and _world.sees_point(global_position)
+
+
+var _vis_poll_left: float = 0.0
 
 
 func is_invulnerable() -> bool:
@@ -445,6 +453,9 @@ func _try_start_reload() -> void:
 func _handle_fire(input: Dictionary, delta: float) -> void:
 	_fire_cooldown_left = maxf(0.0, _fire_cooldown_left - delta)
 	if not input["fire"] or _world == null:
+		return
+	# Clicking UI (bag, menu, skill tree) must never discharge a weapon.
+	if get_viewport().gui_get_hovered_control() != null:
 		return
 	if input["fire_pressed"]:
 		var item: LootItem = _hovered_loot_in_range()

@@ -175,6 +175,12 @@ func _ready() -> void:
 	var dash_check := $Hud/MenuPanel/Menu/DashCheck as CheckButton
 	dash_check.set_pressed_no_signal(Game.dash_to_mouse)
 	dash_check.toggled.connect(func(on: bool) -> void: Game.set_dash_to_mouse(on))
+	($Hud/Console/Box/Input as LineEdit).text_submitted.connect(_on_console_submitted)
+	($Hud/DeathPanel/Col/LeaveDead as Button).pressed.connect(_leave_to_menu)
+	($Hud/ExtractPanel/Note as Label).visible = true
+	for skill: int in 3:
+		var btn := $Hud/SkillPanel/Skills.get_child(skill + 1) as Button
+		btn.pressed.connect(_ui_spend_point.bind(skill))
 	if multiplayer.is_server():
 		multiplayer.peer_disconnected.connect(_on_peer_disconnected)
 		_slots[1] = 0
@@ -184,10 +190,10 @@ func _ready() -> void:
 		_stats[1] = PackedInt32Array([0, 0, 0, 0])
 		_sync_player_hp.rpc(1, Player.MAX_HEALTH)
 		_init_loadout(1)
-		host_set_name(1, SteamLobby.persona() if SteamLobby.available else "Host")
+		host_set_name(1, Game.display_name())
 	else:
 		_request_join.rpc_id(1)
-		_register_name.rpc_id(1, SteamLobby.persona() if SteamLobby.available else "Player")
+		_register_name.rpc_id(1, Game.display_name())
 
 
 func _process(_delta: float) -> void:
@@ -221,9 +227,63 @@ func _physics_process(delta: float) -> void:
 func _unhandled_input(event: InputEvent) -> void:
 	if event.is_action_pressed(&"ui_cancel"):
 		_menu_panel.visible = not _menu_panel.visible
-	elif event is InputEventKey and event.pressed and not event.echo \
-			and (event as InputEventKey).physical_keycode == KEY_F1:
-		SteamLobby.invite_friends()
+	elif event.is_action_pressed(&"skills"):
+		($Hud/SkillPanel as PanelContainer).visible = \
+				not ($Hud/SkillPanel as PanelContainer).visible
+	elif event is InputEventKey and event.pressed and not event.echo:
+		var key: Key = (event as InputEventKey).physical_keycode
+		if key == KEY_F1:
+			SteamLobby.invite_friends()
+		elif key == KEY_F2:
+			var console := $Hud/Console as PanelContainer
+			console.visible = not console.visible
+			if console.visible:
+				($Hud/Console/Box/Input as LineEdit).grab_focus()
+
+
+func _on_console_submitted(text: String) -> void:
+	var box := $Hud/Console/Box/Input as LineEdit
+	box.clear()
+	var out := $Hud/Console/Box/Output as Label
+	var parts: PackedStringArray = text.strip_edges().split(" ", false)
+	if parts.is_empty():
+		return
+	if not multiplayer.is_server():
+		out.text = "console commands are host-only (for now)"
+		return
+	var cmd: String = parts[0].to_lower()
+	match cmd:
+		"help":
+			out.text = "give <type 0-11> <n> · heal · xp <n> · die · respawn · extract · killenemies"
+		"give":
+			if parts.size() >= 3 and _loadouts.has(1):
+				_loadouts[1][clampi(int(parts[1]), 0, ITEM_TYPES - 1)] += int(parts[2])
+				_push_loadout(1)
+				out.text = "given"
+		"heal":
+			_player_hp[1] = Player.MAX_HEALTH
+			_sync_player_hp.rpc(1, Player.MAX_HEALTH)
+			out.text = "healed"
+		"xp":
+			if parts.size() >= 2:
+				host_award_xp(1, int(parts[1]))
+				out.text = "xp granted"
+		"die":
+			host_damage_player(1, 9999, 0, true)
+			out.text = "oof"
+		"respawn":
+			host_respawn_player(1)
+			out.text = "back in"
+		"extract":
+			host_extract_player(1)
+			out.text = "gone"
+		"killenemies":
+			for child: Node in _enemies.get_children():
+				if child.has_method(&"host_take_damage"):
+					child.call(&"host_take_damage", 99999, 1)
+			out.text = "silence"
+		_:
+			out.text = "unknown command — try help"
 
 
 func _close_menu() -> void:
@@ -475,6 +535,14 @@ func refresh_bag(counts: PackedInt32Array, equipped: int) -> void:
 	var header := Label.new()
 	header.text = "BACKPACK  (B to close)"
 	list.add_child(header)
+	var equipped_label := Label.new()
+	var weapon_name: String = "nothing"
+	if equipped >= 0 and equipped < LootItem.NAMES.size():
+		weapon_name = LootItem.NAMES[equipped]
+	equipped_label.text = "EQUIPPED — Weapon: %s · Belt: Medkit / %s" % [
+			weapon_name, Game.GRENADES[0]]
+	list.add_child(equipped_label)
+	list.add_child(HSeparator.new())
 	for item_type: int in counts.size():
 		if counts[item_type] <= 0:
 			continue
@@ -496,6 +564,15 @@ func refresh_bag(counts: PackedInt32Array, equipped: int) -> void:
 		drop.pressed.connect(_ui_drop.bind(item_type))
 		row.add_child(drop)
 		list.add_child(row)
+
+
+func _ui_spend_point(skill: int) -> void:
+	if _my_points <= 0:
+		return
+	if multiplayer.is_server():
+		host_spend_point(1, skill)
+	else:
+		_request_spend_point.rpc_id(1, skill)
 
 
 func _ui_equip(item_type: int) -> void:
@@ -546,11 +623,56 @@ func host_damage_player(id: int, amount: int, source: int = 0, pierce_shield: bo
 		if source > 0 and source != id and _stats.has(source):
 			_stats[source][2] += 1
 			_sync_stats.rpc(source, _stats[source])
-		_schedule_respawn(id)
+		_host_player_death(id)
+
+
+## PERMADEATH: your corpse keeps your bag; no respawn (harness excepted).
+func _host_player_death(id: int) -> void:
+	print("[combat] player %d died — gear stays on the corpse" % id)
+	var pawn := pawn_for(id)
+	if pawn != null and _loadouts.has(id):
+		_next_corpse += 1
+		_spawn_corpse.rpc(_next_corpse, pawn.global_position, 0)
+		var corpse := $Corpses.get_node_or_null("c%d" % _next_corpse) as Corpse
+		if corpse != null:
+			corpse.inventory = _loadouts[id].duplicate()
+			_set_corpse_inventory.rpc(_next_corpse, corpse.inventory)
+		var empty := PackedInt32Array()
+		empty.resize(ITEM_TYPES)
+		_loadouts[id] = empty
+		_equipped[id] = -1
+		_push_loadout(id)
+	if id == 1:
+		_show_death_local()
+	else:
+		_show_death.rpc_id(id)
+	if Game.auto_walk:
+		_schedule_respawn(id)  # headless harness still cycles
+
+
+@rpc("authority", "call_local", "reliable")
+func _set_corpse_inventory(cid: int, inv: PackedInt32Array) -> void:
+	var corpse := $Corpses.get_node_or_null("c%d" % cid) as Corpse
+	if corpse != null:
+		corpse.inventory = inv.duplicate()
+
+
+@rpc("authority", "call_remote", "reliable")
+func _show_death() -> void:
+	_show_death_local()
+
+
+func _show_death_local() -> void:
+	($Hud/DeathPanel as PanelContainer).visible = true
+
+
+## Console / harness escape hatch.
+func host_respawn_player(id: int) -> void:
+	if multiplayer.is_server() and _player_hp.has(id):
+		_on_respawn_timer(id, null)
 
 
 func _schedule_respawn(id: int) -> void:
-	print("[combat] player %d died" % id)
 	var timer := Timer.new()
 	timer.one_shot = true
 	timer.wait_time = RESPAWN_SECONDS
@@ -560,13 +682,102 @@ func _schedule_respawn(id: int) -> void:
 
 
 func _on_respawn_timer(id: int, timer: Timer) -> void:
-	timer.queue_free()
+	if timer != null:
+		timer.queue_free()
 	if not multiplayer.is_server() or not _player_hp.has(id) or pawn_for(id) == null:
 		return
 	_player_respawned.rpc(id)
 	_player_hp[id] = Player.MAX_HEALTH
 	_sync_player_hp.rpc(id, Player.MAX_HEALTH)
 	_init_loadout(id)
+	if id == 1:
+		_hide_death_local()
+	else:
+		_hide_death.rpc_id(id)
+
+
+@rpc("authority", "call_remote", "reliable")
+func _hide_death() -> void:
+	_hide_death_local()
+
+
+func _hide_death_local() -> void:
+	($Hud/DeathPanel as PanelContainer).visible = false
+
+
+# --- extraction ----------------------------------------------------------------
+
+## Host-only, called by an ExtractionZone when a player's timer completes.
+func host_extract_player(id: int) -> void:
+	if not multiplayer.is_server() or not _loadouts.has(id):
+		return
+	var carried: int = 0
+	for n: int in _loadouts[id]:
+		carried += n
+	print("[raid] player %d EXTRACTED with %d items" % [id, carried])
+	_extracted_fx.rpc(id, carried)
+	# Out of the raid: despawn the pawn (stash persistence is backlog).
+	_spawned_ids.erase(id)
+	_despawn.rpc(id)
+	_local_despawn(id)
+	_broadcast_ready_peers()
+
+
+@rpc("authority", "call_local", "reliable")
+func _extracted_fx(id: int, carried: int) -> void:
+	Game.play_sfx("heal", Vector2.ZERO)
+	if id == multiplayer.get_unique_id():
+		var panel := $Hud/ExtractPanel as PanelContainer
+		($Hud/ExtractPanel/Note as Label).text = \
+				"EXTRACTED!\nYou made it out with %d items.\n(Stash coming soon — for now, glory.)" % carried
+		panel.visible = true
+
+
+# --- XP / levels / skill points (placeholder tree) --------------------------------
+
+var _xp: Dictionary[int, int] = {}
+var _level: Dictionary[int, int] = {}
+var _skill_points: Dictionary[int, int] = {}
+
+
+func host_award_xp(id: int, amount: int) -> void:
+	if not multiplayer.is_server() or id <= 0 or not _player_hp.has(id):
+		return
+	_xp[id] = int(_xp.get(id, 0)) + amount
+	var level: int = int(_level.get(id, 1))
+	while _xp[id] >= level * 100:
+		_xp[id] -= level * 100
+		level += 1
+		_skill_points[id] = int(_skill_points.get(id, 0)) + 1
+		print("[xp] player %d reached level %d (+1 skill point)" % [id, level])
+	_level[id] = level
+	_sync_xp.rpc(id, _xp[id], level, int(_skill_points.get(id, 0)))
+
+
+@rpc("authority", "call_local", "reliable")
+func _sync_xp(id: int, xp: int, level: int, points: int) -> void:
+	if id == multiplayer.get_unique_id():
+		($Hud/XpLabel as Label).text = "Lv %d · XP %d/%d · Skill pts: %d" % [level, xp, level * 100, points]
+		_my_points = points
+
+
+var _my_points: int = 0
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func _request_spend_point(skill: int) -> void:
+	if multiplayer.is_server():
+		host_spend_point(multiplayer.get_remote_sender_id(), skill)
+
+
+func host_spend_point(id: int, skill: int) -> void:
+	if not multiplayer.is_server() or int(_skill_points.get(id, 0)) <= 0:
+		return
+	if skill < 0 or skill > 2:
+		return
+	_skill_points[id] -= 1
+	print("[xp] player %d invested in placeholder skill %d" % [id, skill])
+	_sync_xp.rpc(id, int(_xp.get(id, 0)), int(_level.get(id, 1)), _skill_points[id])
 
 
 @rpc("authority", "call_local", "reliable")
@@ -813,6 +1024,7 @@ func host_projectile_hit(pid: int, target: Node, hostile: bool, dmg: int, shoote
 		host_damage_player(victim, dmg, shooter)
 	elif target.has_method(&"host_take_damage"):
 		target.call(&"host_take_damage", dmg, shooter)
+		host_award_xp(shooter, dmg)  # damage dealt to bandits = experience
 	_despawn_projectile.rpc(pid)
 	return true
 
@@ -1038,6 +1250,23 @@ func host_corpse_loot(at: Vector2, count: int) -> void:
 				_scatter_point(at))
 
 
+## A dead PLAYER's actual belongings hit the floor (capped to keep it sane).
+func host_spill_inventory(at: Vector2, inv: PackedInt32Array) -> void:
+	if not multiplayer.is_server():
+		return
+	var spilled: int = 0
+	for item_type: int in inv.size():
+		var pile: int = inv[item_type]
+		if item_type == ITEM_AMMO:
+			pile = ceili(float(pile) / float(AMMO_PER_PICKUP))  # re-bundle into cases
+		for i: int in pile:
+			if spilled >= 16:
+				return
+			spilled += 1
+			_next_loot += 1
+			_spawn_loot.rpc(_next_loot, item_type, _scatter_point(at))
+
+
 func _scatter_point(center: Vector2) -> Vector2:
 	for attempt: int in 8:
 		var candidate: Vector2 = center + Vector2.RIGHT.rotated(randf() * TAU) * (26.0 + randf() * 18.0)
@@ -1084,6 +1313,7 @@ func host_request_pickup(player_id: int, loot_id: int) -> void:
 		store_as = ITEM_AMMO  # small packs pour into the same reserve
 	_loadouts[player_id][store_as] += gain
 	_push_loadout(player_id)
+	host_award_xp(player_id, 15)  # looter's instinct
 	print("[loot] player %d picked up %s (+%d)" % [player_id, item.display_name(), gain])
 	_despawn_loot.rpc(loot_id)
 

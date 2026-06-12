@@ -38,6 +38,10 @@ layout_mode = 2
 text = "Steam: …"
 horizontal_alignment = 1
 
+[node name="NameEdit" type="LineEdit" parent="Center/Column"]
+layout_mode = 2
+placeholder_text = "Your name (used when Steam is off)"
+
 [node name="HostSteamButton" type="Button" parent="Center/Column" unique_id=2085389764]
 layout_mode = 2
 text = "Host (Steam) — friends join from the friends list"

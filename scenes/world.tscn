@@ -1,4 +1,4 @@
-[gd_scene load_steps=10 format=3]
+[gd_scene load_steps=11 format=3]
 
 [ext_resource type="Script" path="res://scripts/world.gd" id="1_world"]
 [ext_resource type="PackedScene" path="res://scenes/enemy.tscn" id="2_enemy"]
@@ -9,6 +9,7 @@
 [ext_resource type="PackedScene" path="res://scenes/hugger.tscn" id="7_hugger"]
 [ext_resource type="PackedScene" path="res://scenes/mother.tscn" id="8_mother"]
 [ext_resource type="PackedScene" path="res://scenes/siren.tscn" id="9_siren"]
+[ext_resource type="Script" path="res://scripts/extraction.gd" id="10_extract"]
 
 [node name="World" type="Node2D"]
 script = ExtResource("1_world")
@@ -206,6 +207,14 @@ position = Vector2(-1600, 20)
 
 [node name="Corpses" type="Node2D" parent="."]
 
+[node name="Extraction1" type="Node2D" parent="."]
+position = Vector2(2020, -1440)
+script = ExtResource("10_extract")
+
+[node name="Extraction2" type="Node2D" parent="."]
+position = Vector2(-2040, -1430)
+script = ExtResource("10_extract")
+
 [node name="Hud" type="CanvasLayer" parent="."]
 
 [node name="Help" type="Label" parent="Hud"]
@@ -308,6 +317,111 @@ text = "Dash toward mouse"
 
 [node name="Leave" type="Button" parent="Hud/MenuPanel/Menu"]
 text = "Leave Raid"
+
+[node name="XpLabel" type="Label" parent="Hud"]
+anchors_preset = 1
+anchor_left = 1.0
+anchor_right = 1.0
+offset_left = -340.0
+offset_top = 10.0
+offset_right = -14.0
+offset_bottom = 36.0
+grow_horizontal = 0
+horizontal_alignment = 2
+text = "Lv 1 · XP 0/100 · Skill pts: 0"
+
+[node name="DeathPanel" type="PanelContainer" parent="Hud"]
+visible = false
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -170.0
+offset_top = -80.0
+offset_right = 170.0
+offset_bottom = 80.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="Col" type="VBoxContainer" parent="Hud/DeathPanel"]
+theme_override_constants/separation = 12
+
+[node name="Title" type="Label" parent="Hud/DeathPanel/Col"]
+text = "YOU DIED
+Your gear stays on your corpse.
+A friend can loot it back for you."
+horizontal_alignment = 1
+
+[node name="LeaveDead" type="Button" parent="Hud/DeathPanel/Col"]
+text = "Leave Raid"
+
+[node name="ExtractPanel" type="PanelContainer" parent="Hud"]
+visible = false
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -180.0
+offset_top = -70.0
+offset_right = 180.0
+offset_bottom = 70.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="Note" type="Label" parent="Hud/ExtractPanel"]
+text = "EXTRACTED!"
+horizontal_alignment = 1
+
+[node name="SkillPanel" type="PanelContainer" parent="Hud"]
+visible = false
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -160.0
+offset_top = -110.0
+offset_right = 160.0
+offset_bottom = 110.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="Skills" type="VBoxContainer" parent="Hud/SkillPanel"]
+theme_override_constants/separation = 8
+
+[node name="Title" type="Label" parent="Hud/SkillPanel/Skills"]
+text = "SKILLS (placeholder tree — K to close)"
+horizontal_alignment = 1
+
+[node name="Skill0" type="Button" parent="Hud/SkillPanel/Skills"]
+text = "Vigor — costs 1 point (does nothing yet)"
+
+[node name="Skill1" type="Button" parent="Hud/SkillPanel/Skills"]
+text = "Swiftness — costs 1 point (does nothing yet)"
+
+[node name="Skill2" type="Button" parent="Hud/SkillPanel/Skills"]
+text = "Focus — costs 1 point (does nothing yet)"
+
+[node name="Console" type="PanelContainer" parent="Hud"]
+visible = false
+anchors_preset = 5
+anchor_left = 0.5
+anchor_right = 0.5
+offset_left = -280.0
+offset_top = 40.0
+offset_right = 280.0
+offset_bottom = 120.0
+grow_horizontal = 2
+
+[node name="Box" type="VBoxContainer" parent="Hud/Console"]
+
+[node name="Output" type="Label" parent="Hud/Console/Box"]
+text = "dev console — type help"
+
+[node name="Input" type="LineEdit" parent="Hud/Console/Box"]
+placeholder_text = "command..."
 
 [node name="FlashOverlay" type="ColorRect" parent="Hud"]
 modulate = Color(1, 1, 1, 0)

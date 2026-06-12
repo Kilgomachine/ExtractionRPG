@@ -33,6 +33,7 @@ var auto_walk: bool = false
 
 ## User settings (persisted to user://settings.json — JSON only, per rules).
 var dash_to_mouse: bool = false
+var player_name: String = "Mercenary"
 
 var _cone_texture: ImageTexture
 var _glow_texture: ImageTexture
@@ -92,6 +93,20 @@ func set_dash_to_mouse(value: bool) -> void:
 	_save_settings()
 
 
+func set_player_name(value: String) -> void:
+	player_name = value.strip_edges().substr(0, 24)
+	if player_name.is_empty():
+		player_name = "Mercenary"
+	_save_settings()
+
+
+## The name everyone sees: Steam persona when available, manual otherwise.
+func display_name() -> String:
+	if SteamLobby.available:
+		return SteamLobby.persona()
+	return player_name
+
+
 func _load_settings() -> void:
 	if not FileAccess.file_exists(SETTINGS_PATH):
 		return
@@ -100,14 +115,19 @@ func _load_settings() -> void:
 		return
 	var parsed: Variant = JSON.parse_string(file.get_as_text())
 	if parsed is Dictionary:
-		dash_to_mouse = bool((parsed as Dictionary).get("dash_to_mouse", false))
+		var dict := parsed as Dictionary
+		dash_to_mouse = bool(dict.get("dash_to_mouse", false))
+		player_name = String(dict.get("player_name", "Mercenary"))
 
 
 func _save_settings() -> void:
 	var file := FileAccess.open(SETTINGS_PATH, FileAccess.WRITE)
 	if file == null:
 		return
-	file.store_string(JSON.stringify({"dash_to_mouse": dash_to_mouse}))
+	file.store_string(JSON.stringify({
+		"dash_to_mouse": dash_to_mouse,
+		"player_name": player_name,
+	}))
 
 
 # --- audio ---------------------------------------------------------------------
@@ -186,6 +206,7 @@ func _register_input_actions() -> void:
 	_add_key_action(&"interact", KEY_E)
 	_add_key_action(&"reload", KEY_R)
 	_add_key_action(&"bag", KEY_B)
+	_add_key_action(&"skills", KEY_K)
 	_add_key_action(&"scoreboard", KEY_TAB)
 	_add_key_action(&"slot_1", KEY_1)
 	_add_key_action(&"slot_2", KEY_2)

@@ -5,6 +5,7 @@ extends Control
 const WORLD_SCENE: String = "res://scenes/world.tscn"
 
 @onready var _steam_label: Label = $Center/Column/SteamLabel
+@onready var _name_edit: LineEdit = $Center/Column/NameEdit
 @onready var _host_steam_button: Button = $Center/Column/HostSteamButton
 @onready var _host_button: Button = $Center/Column/HostButton
 @onready var _ip_edit: LineEdit = $Center/Column/IpEdit
@@ -21,10 +22,13 @@ func _ready() -> void:
 	multiplayer.connection_failed.connect(_on_connection_failed)
 	SteamLobby.session_ready.connect(_on_steam_session_ready)
 	SteamLobby.session_failed.connect(_on_steam_session_failed)
+	_name_edit.text = Game.player_name
+	_name_edit.text_changed.connect(func(value: String) -> void: Game.set_player_name(value))
 	if SteamLobby.available:
 		_steam_label.text = "Steam: %s" % SteamLobby.persona()
+		_name_edit.visible = false  # Steam name wins
 	else:
-		_steam_label.text = "Steam not detected — local play only"
+		_steam_label.text = "Steam not detected — pick a name below"
 		_host_steam_button.disabled = true
 	# Headless/CI hooks: `-- --auto-host` or `-- --auto-join` (local ENet).
 	# Deferred: changing scenes from inside _ready is unsafe.

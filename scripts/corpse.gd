@@ -13,6 +13,8 @@ const BAR_SIZE := Vector2(40, 6)
 enum CorpseState { FULL, INVESTIGATING, INVESTIGATED, RETRIEVING, EMPTY }
 
 var loot_count: int = 1
+## Player corpses carry their ACTUAL items (counts by type); empty = roll loot.
+var inventory: PackedInt32Array = PackedInt32Array()
 
 var _state: CorpseState = CorpseState.FULL
 var _searcher_id: int = 0
@@ -52,7 +54,10 @@ func _physics_process(delta: float) -> void:
 	if _state == CorpseState.INVESTIGATING and _progress >= INVESTIGATE_TIME:
 		_set_state.rpc(CorpseState.INVESTIGATED, 0)
 	elif _state == CorpseState.RETRIEVING and _progress >= RETRIEVE_TIME:
-		_world.host_corpse_loot(global_position, loot_count)
+		if inventory.is_empty():
+			_world.host_corpse_loot(global_position, loot_count)
+		else:
+			_world.host_spill_inventory(global_position, inventory)
 		_set_state.rpc(CorpseState.EMPTY, 0)
 
 
