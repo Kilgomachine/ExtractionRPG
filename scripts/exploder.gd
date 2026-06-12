@@ -170,9 +170,10 @@ func _run_ai(delta: float) -> void:
 				_target_id = 0
 				_enter(State.IDLE)
 				return
-			velocity = to_target.normalized() * move_speed
+			var heading: Vector2 = _world.steer_dir(global_position, to_target.normalized())
+			velocity = heading * move_speed
 			move_and_slide()
-			rotation = to_target.angle()
+			rotation = heading.angle()
 			if to_target.length() <= fuse_range and _acquire_delay_left == 0.0:
 				_enter(State.FUSE)
 				_fuse.rpc(global_position)

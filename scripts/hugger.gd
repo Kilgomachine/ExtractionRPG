@@ -154,12 +154,13 @@ func _run_ai(delta: float) -> void:
 				_target_id = 0
 				_enter(State.IDLE)
 				return
-			# Zigzag: weave the heading so straight shots whiff.
-			var heading: float = to_target.angle() \
+			# Zigzag: weave the heading so straight shots whiff (walls respected).
+			var weave: float = to_target.angle() \
 					+ sin(_state_time * zigzag_rate) * zigzag_strength
-			velocity = Vector2.from_angle(heading) * move_speed
+			var heading: Vector2 = _world.steer_dir(global_position, Vector2.from_angle(weave))
+			velocity = heading * move_speed
 			move_and_slide()
-			rotation = heading
+			rotation = heading.angle()
 			if to_target.length() <= latch_range and _acquire_delay_left == 0.0 \
 					and not target.is_invulnerable():
 				_enter(State.LATCHED)

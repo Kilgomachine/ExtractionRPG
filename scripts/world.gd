@@ -1335,6 +1335,22 @@ func _scatter_point(center: Vector2) -> Vector2:
 	return center
 
 
+## Obstacle-avoidance steering: probe ahead, swerve around walls instead of
+## grinding into them. Cheap stand-in until real navmesh pathing (backlog).
+func steer_dir(from: Vector2, desired: Vector2) -> Vector2:
+	var space := get_world_2d().direct_space_state
+	var look: float = 56.0
+	var query := PhysicsRayQueryParameters2D.create(from, from + desired * look, 1)
+	if space.intersect_ray(query).is_empty():
+		return desired
+	for angle: float in [0.6, -0.6, 1.2, -1.2]:
+		var alt: Vector2 = desired.rotated(angle)
+		query = PhysicsRayQueryParameters2D.create(from, from + alt * look, 1)
+		if space.intersect_ray(query).is_empty():
+			return alt
+	return desired.rotated(2.2)  # boxed in — hard turn back out of the pocket
+
+
 ## Public geometry helper for AI goal validation etc.
 func point_in_wall(point: Vector2, margin: float) -> bool:
 	return _inside_any_wall(point, margin)

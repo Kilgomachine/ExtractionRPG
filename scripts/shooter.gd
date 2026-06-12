@@ -198,9 +198,10 @@ func _hunt(target: Player, delta: float) -> void:
 	var goal: Vector2 = target.global_position if has_sight else _last_seen
 	var to_goal: Vector2 = goal - global_position
 	if to_goal.length() > (preferred_range if has_sight else 30.0):
-		velocity = to_goal.normalized() * chase_speed
+		var heading: Vector2 = _world.steer_dir(global_position, to_goal.normalized())
+		velocity = heading * chase_speed
 		move_and_slide()
-		rotation = to_goal.angle()
+		rotation = heading.angle()
 	elif has_sight:
 		rotation = to_target.angle()
 	# Can't get a shot off for a while? Lose interest — you've shaken it.
