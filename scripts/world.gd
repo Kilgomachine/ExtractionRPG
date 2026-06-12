@@ -827,7 +827,7 @@ func _spawn_flame(fire_id: int, origin: Vector2, dir_angle: float, fire_range: f
 func host_spawn_locker_loot(at: Vector2) -> void:
 	if not multiplayer.is_server():
 		return
-	var count: int = 2 + (randi() % 2)
+	var count: int = 3 + (randi() % 3)  # 3-5 items per locker
 	for i: int in count:
 		_next_loot += 1
 		_spawn_loot.rpc(_next_loot, LOOT_POOL[randi() % LOOT_POOL.size()], _scatter_point(at))

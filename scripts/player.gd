@@ -58,6 +58,8 @@ var _light_tween: Tween
 var _spawn_grace_left: float = 0.0
 var _stamina: float = STAMINA_MAX
 var _stamina_delay: float = 0.0
+var _charm_left: float = 0.0
+var _charm_source: String = ""
 var _running: bool = false
 var _trail_left: float = 0.0
 var _last_aim := Vector2.RIGHT
@@ -148,6 +150,24 @@ func dodge_active() -> bool:
 ## The host's hearing check: is this pawn sprinting right now?
 func is_running() -> bool:
 	return _running if is_multiplayer_authority() else _remote_running
+
+
+## Siren song hit us: feet walk toward her, weapons lower. Dash breaks it.
+func set_charmed(siren_name: String, duration: float) -> void:
+	if not is_multiplayer_authority() or dead:
+		return
+	_charm_source = siren_name
+	_charm_left = duration
+	_cancel_cast()
+	var tween := create_tween()
+	_body.modulate = Color(1.8, 0.8, 1.6)  # swooning pink
+	tween.tween_property(_body, ^"modulate", Color.WHITE, duration)
+
+
+func break_charm_from(siren_name: String) -> void:
+	if _charm_source == siren_name:
+		_charm_left = 0.0
+		_charm_source = ""
 
 
 func update_displayed_health(hp: int) -> void:
@@ -281,6 +301,8 @@ func _apply_movement(input: Dictionary, delta: float) -> void:
 		_last_aim = aim.normalized()
 	if input["dodge"] and _dodge_cooldown_left == 0.0:
 		_cancel_cast()
+		_charm_left = 0.0  # dashing snaps you out of the Siren's trance
+		_charm_source = ""
 		_dodge_time_left = dodge_duration
 		_dodge_cooldown_left = dodge_cooldown
 		# Options: dash toward the mouse, or along movement (default).
@@ -315,6 +337,16 @@ func _apply_movement(input: Dictionary, delta: float) -> void:
 			speed *= 0.3
 		if latched_count > 0:
 			speed *= pow(0.65, latched_count)  # huggers drag you down
+		# Charmed: your own feet betray you and walk toward the song.
+		_charm_left = maxf(0.0, _charm_left - delta)
+		if _charm_left > 0.0:
+			var siren: Node2D = _find_charm_source()
+			if siren != null:
+				move = (siren.global_position - global_position).normalized()
+				speed = move_speed * 0.6
+				_running = false
+			else:
+				_charm_left = 0.0
 		velocity = move * speed
 		# The Mother's vacuum: client-side pull (movement is client-owned).
 		for node: Node in get_tree().get_nodes_in_group(&"suckers"):
@@ -410,6 +442,8 @@ func _handle_fire(input: Dictionary, delta: float) -> void:
 			return
 	if _cast_kind != CastKind.NONE or _searching:
 		return
+	if _charm_left > 0.0:
+		return  # too busy swooning to shoot
 	match active_slot:
 		1:
 			if _fire_cooldown_left > 0.0:
@@ -468,6 +502,13 @@ func _handle_interact(input: Dictionary) -> void:
 		nearest.host_request_search(1)
 	else:
 		nearest._request_search.rpc_id(1)
+
+
+func _find_charm_source() -> Node2D:
+	for node: Node in get_tree().get_nodes_in_group(&"sirens"):
+		if node is Node2D and String(node.name) == _charm_source and node.visible:
+			return node as Node2D
+	return null
 
 
 func _hovered_loot_in_range() -> LootItem:

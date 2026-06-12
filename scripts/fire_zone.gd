@@ -40,7 +40,7 @@ func setup_cone(origin: Vector2, dir_angle: float, fire_range: float,
 	half_angle_deg = half_deg
 	duration = fire_duration
 	tick_interval = 0.125
-	tick_damage = 32
+	tick_damage = 16  # halved from 32 after playtest — still ~128 dps
 	_tick_left = tick_interval
 
 

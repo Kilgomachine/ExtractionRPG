@@ -96,7 +96,7 @@ func host_take_damage(amount: int, attacker: int = 0) -> void:
 	if _health == 0:
 		_die.rpc()
 		_world.host_record_kill(attacker)
-		_world.host_drop_enemy_loot(global_position, 1)
+		_world.host_drop_enemy_loot(global_position, 2)
 		print("[combat] %s died" % name)
 
 

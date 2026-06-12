@@ -1,4 +1,4 @@
-[gd_scene load_steps=9 format=3]
+[gd_scene load_steps=10 format=3]
 
 [ext_resource type="Script" path="res://scripts/world.gd" id="1_world"]
 [ext_resource type="PackedScene" path="res://scenes/enemy.tscn" id="2_enemy"]
@@ -8,6 +8,7 @@
 [ext_resource type="PackedScene" path="res://scenes/exploder.tscn" id="6_exploder"]
 [ext_resource type="PackedScene" path="res://scenes/hugger.tscn" id="7_hugger"]
 [ext_resource type="PackedScene" path="res://scenes/mother.tscn" id="8_mother"]
+[ext_resource type="PackedScene" path="res://scenes/siren.tscn" id="9_siren"]
 
 [node name="World" type="Node2D"]
 script = ExtResource("1_world")
@@ -111,6 +112,15 @@ position = Vector2(-1950, 1260)
 
 [node name="Hugger7" parent="Enemies" instance=ExtResource("7_hugger")]
 position = Vector2(-1870, 1440)
+
+[node name="Siren1" parent="Enemies" instance=ExtResource("9_siren")]
+position = Vector2(-960, -380)
+
+[node name="Siren2" parent="Enemies" instance=ExtResource("9_siren")]
+position = Vector2(1150, 150)
+
+[node name="Siren3" parent="Enemies" instance=ExtResource("9_siren")]
+position = Vector2(-300, 800)
 
 [node name="Lockers" type="Node2D" parent="."]
 
