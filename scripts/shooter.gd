@@ -149,7 +149,7 @@ func _run_ai(delta: float) -> void:
 	if _aim_left > 0.0:
 		_aim_left -= delta
 		var aim_target: Player = _world.pawn_for(_target_id)
-		if aim_target != null and not aim_target.dead:
+		if aim_target != null and not aim_target.dead and not aim_target.downed:
 			rotation = (aim_target.global_position - global_position).angle()
 		if _aim_left <= 0.0:
 			_fire_at_target()
@@ -160,7 +160,7 @@ func _run_ai(delta: float) -> void:
 		return
 
 	var target: Player = _world.pawn_for(_target_id)
-	if target != null and not target.dead:
+	if target != null and not target.dead and not target.downed:
 		_hunt(target, delta)
 		return
 	_target_id = 0
@@ -249,7 +249,7 @@ func _pick_patrol_goal() -> void:
 
 func _fire_at_target() -> void:
 	var target: Player = _world.pawn_for(_target_id)
-	if target == null or target.dead:
+	if target == null or target.dead or target.downed:
 		return
 	if not _has_los(target.global_position):
 		return

@@ -41,6 +41,14 @@ func _physics_process(delta: float) -> void:
 				_world.host_extract_player(id)
 		elif _progress.has(id):
 			_progress.erase(id)  # stepped out — start over
+	# Sweep progress that alive_pawns() can no longer see: a player who went
+	# DOWNED, died, or despawned mid-extract. Without this their progress freezes
+	# and a revive-in-zone would resume the head-start (skipping the bleed window).
+	for id: int in _progress.keys():
+		var holder: Player = _world.pawn_for(id)
+		if holder == null or holder.dead or holder.downed \
+				or holder.global_position.distance_to(global_position) > RADIUS:
+			_progress.erase(id)
 	if someone != _active:
 		_active = someone
 		_set_active.rpc(someone)

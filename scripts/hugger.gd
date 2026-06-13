@@ -146,7 +146,7 @@ func _run_ai(delta: float) -> void:
 		State.CHASE:
 			_acquire_delay_left = maxf(0.0, _acquire_delay_left - delta)
 			var target: Player = _world.pawn_for(_target_id)
-			if target == null or target.dead:
+			if target == null or target.dead or target.downed:
 				_target_id = 0
 				_enter(State.IDLE)
 				return
@@ -170,7 +170,7 @@ func _run_ai(delta: float) -> void:
 				_latch.rpc(_target_id, true)
 		State.LATCHED:
 			var victim: Player = _world.pawn_for(_target_id)
-			if victim == null or victim.dead:
+			if victim == null or victim.dead or victim.downed:
 				# ALWAYS broadcast the unlatch — even when the pawn is gone
 				# (extraction/disconnect), or we stay layer-0 and bulletproof.
 				_latch.rpc(_target_id, false)

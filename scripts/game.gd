@@ -7,6 +7,12 @@ extends Node
 const DEFAULT_PORT: int = 24565
 const MAX_CLIENTS: int = 4
 const SETTINGS_PATH: String = "user://settings.json"
+const STASH_PATH: String = "user://stash.json"
+const STASH_ITEM_TYPES: int = 12  # mirrors GameWorld.ITEM_TYPES
+const STASH_ITEM_CAP: int = 999   # sane per-type ceiling (corrupt-file guard)
+# Scav fallback so a broke player is never soft-locked: index = item type.
+# [scrap, medkit, valuable, ammo, frag, smoke, flash, rifle, smg, shotgun, laser, ammo_small]
+const STARTER_KIT: Array[int] = [0, 2, 0, 30, 1, 1, 0, 1, 0, 0, 0, 0]
 
 # Light-shape tuning (cone width is a core feel parameter for this genre).
 const CONE_RADIUS_PX: int = 128
@@ -35,6 +41,26 @@ var auto_walk: bool = false
 var dash_to_mouse: bool = false
 var player_name: String = "Mercenary"
 
+## Per-client persistent stash (user://stash.json — JSON only). String item-key
+## "0".."11" -> int count. This is the player's bank: extraction deposits here,
+## the camp withdraws from here, death loses what was carried.
+var stash: Dictionary = {}
+
+## The kit the Camp scene chose to bring into the next raid. Length-12 counts +
+## the gun to equip. Empty counts => world.gd seeds the default testing kit
+## (keeps the headless harness working). Carried across the Camp->raid scene
+## change because this autoload outlives both scenes.
+var chosen_loadout: PackedInt32Array = PackedInt32Array()
+var chosen_equipped: int = -1
+
+## The kit currently AT RISK in the raid — withdrawn from the stash on Deploy.
+## Cleared when its fate is decided (extract banks the survivors; death loses it
+## to the corpse). If a raid is left ALIVE without either — menu-leave, host
+## disconnect, or a join that never lands — this is re-banked so withdrawn gear
+## is never silently destroyed. Lives on this autoload so even a host-drop (no
+## host to arbitrate) can be made whole client-side.
+var pending_kit: PackedInt32Array = PackedInt32Array()
+
 var _cone_texture: ImageTexture
 var _glow_texture: ImageTexture
 var _sfx: Dictionary[String, AudioStream] = {}
@@ -44,6 +70,7 @@ func _ready() -> void:
 	_register_input_actions()
 	auto_walk = "--auto-walk" in OS.get_cmdline_user_args()
 	_load_settings()
+	_load_stash()
 	for sfx_name: String in ["shot", "shot_smg", "shot_shotgun", "laser", "boom",
 			"hit", "dodge", "heal", "flame", "flash", "latch"]:
 		var stream := load("res://assets/sfx/%s.wav" % sfx_name) as AudioStream
@@ -128,6 +155,94 @@ func _save_settings() -> void:
 		"dash_to_mouse": dash_to_mouse,
 		"player_name": player_name,
 	}))
+
+
+# --- stash (per-client, JSON only — same security rules as settings) -----------
+
+func _load_stash() -> void:
+	stash = {}
+	if FileAccess.file_exists(STASH_PATH):
+		var file := FileAccess.open(STASH_PATH, FileAccess.READ)
+		if file != null:
+			var parsed: Variant = JSON.parse_string(file.get_as_text())
+			if parsed is Dictionary:
+				var dict := parsed as Dictionary
+				# Rebuild from the trusted key domain only — a hand-edited file
+				# can't inject unknown keys, negatives, or absurd counts.
+				for t: int in STASH_ITEM_TYPES:
+					var key: String = str(t)
+					var count: int = clampi(int(dict.get(key, 0)), 0, STASH_ITEM_CAP)
+					if count > 0:
+						stash[key] = count
+	# Broke (or first launch): hand out the free scav kit so the loop never
+	# soft-locks. You keep earned gear; lose everything and you fall back here.
+	if _stash_total() == 0:
+		for t: int in STASH_ITEM_TYPES:
+			if STARTER_KIT[t] > 0:
+				stash[str(t)] = STARTER_KIT[t]
+		_save_stash()
+
+
+func _save_stash() -> void:
+	var file := FileAccess.open(STASH_PATH, FileAccess.WRITE)
+	if file == null:
+		return
+	file.store_string(JSON.stringify(stash))
+
+
+func _stash_total() -> int:
+	var total: int = 0
+	for key: String in stash:
+		total += int(stash[key])
+	return total
+
+
+## The stash as a length-12 counts array (item type index -> count).
+func stash_counts() -> PackedInt32Array:
+	var counts := PackedInt32Array()
+	counts.resize(STASH_ITEM_TYPES)
+	for t: int in STASH_ITEM_TYPES:
+		counts[t] = int(stash.get(str(t), 0))
+	return counts
+
+
+## Add a deposit (length-12 counts, e.g. an extracted loadout) and persist.
+func stash_add(counts: PackedInt32Array) -> void:
+	for t: int in mini(counts.size(), STASH_ITEM_TYPES):
+		if counts[t] > 0:
+			stash[str(t)] = clampi(int(stash.get(str(t), 0)) + counts[t], 0, STASH_ITEM_CAP)
+	_save_stash()
+
+
+## Settle the at-risk kit when leaving a raid ALIVE (not extract/death): bank the
+## given counts — the CURRENT host-synced loadout, net of drops/pickups/reloads,
+## NOT the stale deploy-time snapshot (which would dupe items dropped to a friend
+## who then extracts them). Idempotent: only fires while a kit is actually at risk.
+func settle_pending_kit(current_counts: PackedInt32Array) -> void:
+	if pending_kit.is_empty():
+		return
+	stash_add(current_counts)
+	pending_kit = PackedInt32Array()
+
+
+## The kit's fate is settled (extracted-and-deposited, or lost to a corpse).
+func clear_pending_kit() -> void:
+	pending_kit = PackedInt32Array()
+
+
+## Withdraw a loadout (length-12 counts) from the stash and persist. Clamps so
+## you can never pull more of a type than you actually own.
+func stash_remove(counts: PackedInt32Array) -> void:
+	for t: int in mini(counts.size(), STASH_ITEM_TYPES):
+		if counts[t] <= 0:
+			continue
+		var key: String = str(t)
+		var left: int = int(stash.get(key, 0)) - counts[t]
+		if left > 0:
+			stash[key] = left
+		else:
+			stash.erase(key)
+	_save_stash()
 
 
 # --- audio ---------------------------------------------------------------------

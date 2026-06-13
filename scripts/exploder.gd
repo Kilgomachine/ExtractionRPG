@@ -163,7 +163,7 @@ func _run_ai(delta: float) -> void:
 		State.CHASE:
 			_acquire_delay_left = maxf(0.0, _acquire_delay_left - delta)
 			var target: Player = _world.pawn_for(_target_id)
-			if target == null or target.dead:
+			if target == null or target.dead or target.downed:
 				_target_id = 0
 				_enter(State.IDLE)
 				return

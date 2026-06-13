@@ -231,7 +231,33 @@ offset_left = 14.0
 offset_top = 10.0
 offset_right = 1140.0
 offset_bottom = 36.0
-text = "1-4 slots (re-press cycles) · LMB use · R reload · SHIFT sprint · SPACE dash · E search · B bag · TAB scores · ESC menu"
+text = "1-4 slots (re-press cycles) · LMB use · R reload · SHIFT sprint · SPACE dash · E search/revive · B bag · TAB scores · ESC menu"
+
+[node name="RaidTimer" type="Label" parent="Hud"]
+anchor_left = 0.5
+anchor_right = 0.5
+offset_left = -90.0
+offset_top = 40.0
+offset_right = 90.0
+offset_bottom = 66.0
+grow_horizontal = 2
+horizontal_alignment = 1
+text = "RAID  10:00"
+
+[node name="DownedPanel" type="PanelContainer" parent="Hud"]
+visible = false
+anchor_left = 0.5
+anchor_right = 0.5
+offset_left = -250.0
+offset_top = 74.0
+offset_right = 250.0
+offset_bottom = 132.0
+grow_horizontal = 2
+
+[node name="Note" type="Label" parent="Hud/DownedPanel"]
+text = "DOWNED — crawl to cover and hold on.
+A teammate can revive you (hold E). Bleeding out…"
+horizontal_alignment = 1
 
 [node name="QuickBar" type="Label" parent="Hud"]
 anchors_preset = 2
@@ -362,9 +388,6 @@ text = "YOU DIED
 Your gear stays on your corpse.
 A friend can loot it back for you."
 horizontal_alignment = 1
-
-[node name="RespawnDead" type="Button" parent="Hud/DeathPanel/Col"]
-text = "Respawn (testing only)"
 
 [node name="LeaveDead" type="Button" parent="Hud/DeathPanel/Col"]
 text = "Leave Raid"

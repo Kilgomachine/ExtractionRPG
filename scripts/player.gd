@@ -42,6 +42,7 @@ const SPAWN_SPOTS: Array[Vector2] = [
 
 var spawn_slot: int = 0
 var dead: bool = false
+var downed: bool = false  # hp 0 but not dead: crawling, can't shoot, bleeding out
 var active_slot: int = 1
 var equipped_gun: int = -1  # ITEM type of the equipped weapon (host-synced)
 var grenade_sel: int = 0  # 0 frag / 1 smoke / 2 flash
@@ -49,15 +50,23 @@ var latched_count: int = 0  # huggers riding you
 
 var _displayed_hp: int = MAX_HEALTH
 var _displayed_shield: int = 0
-# Seeded with the starting kit (matches GameWorld._init_loadout).
-var _counts: PackedInt32Array = PackedInt32Array([0, 2, 0, 30, 1, 1, 1, 1, 1, 1, 1])
+# Placeholder until the first host _sync_loadout arrives. MUST be length-12
+# (ITEM_TYPES) — a short array OOB-crashes any pre-sync read of ITEM_AMMO_SMALL.
+var _counts: PackedInt32Array = PackedInt32Array([0, 2, 0, 30, 1, 1, 1, 1, 1, 1, 1, 0])
+var _reviving: bool = false  # a teammate is reviving us (drives the green bar)
+var _downed_since_ms: int = 0
+var _revive_since_ms: int = 0
 var _mags: PackedInt32Array = PackedInt32Array([8, 24, 4])
 var _shoot_slow_left: float = 0.0
 var _recoil := Vector2.ZERO
 var _reload_pending: bool = false
 var _cast_kind: CastKind = CastKind.NONE
 var _cast_left: float = 0.0
-var _searching: bool = false
+# Two independent "busy" locks, each owned by exactly one subsystem so neither
+# can clobber the other: _search_busy (lockers/corpses) and _revive_busy (a
+# revive cast on a teammate). Both dim vision and block sprint/fire/reload.
+var _search_busy: bool = false
+var _revive_busy: bool = false
 var _light_tween: Tween
 var _spawn_grace_left: float = 0.0
 var _stamina: float = STAMINA_MAX
@@ -129,13 +138,17 @@ func _physics_process(delta: float) -> void:
 		return
 	if is_multiplayer_authority():
 		var input: Dictionary = _gather_input()
-		_handle_slots(input)
-		_apply_movement(input, delta)
-		_advance_cast(delta)
-		_handle_fire(input, delta)
-		_handle_interact(input)
-		_apply_dodge_visual(_dodge_time_left > 0.0)
-		_emit_trail(delta, _running)
+		# Downed: you can crawl, nothing else. No shooting, casting, interacting.
+		if downed:
+			_apply_movement(input, delta)
+		else:
+			_handle_slots(input)
+			_apply_movement(input, delta)
+			_advance_cast(delta)
+			_handle_fire(input, delta)
+			_handle_interact(input)
+			_apply_dodge_visual(_dodge_time_left > 0.0)
+			_emit_trail(delta, _running)
 		if _world != null:
 			_world.update_stamina(_stamina / STAMINA_MAX)
 		var my_id: int = multiplayer.get_unique_id()
@@ -237,15 +250,30 @@ func update_displayed_shield(value: int) -> void:
 	_health_bar.set_shield(value, GameWorld.SHIELD_MAX)
 
 
+## Locker/corpse search busy (owned by locker.gd / corpse.gd).
 func set_searching(value: bool) -> void:
-	if _searching == value:
+	if _search_busy == value:
 		return
-	_searching = value
+	_search_busy = value
+	_refresh_busy_dim()
+
+
+## Revive-cast busy (owned by world.gd via _sync_reviver_busy). Separate flag so
+## a search ending can't clear an active revive's lock (and vice versa).
+func set_reviver_busy(value: bool) -> void:
+	if _revive_busy == value:
+		return
+	_revive_busy = value
+	_refresh_busy_dim()
+
+
+func _refresh_busy_dim() -> void:
+	var busy: bool = _search_busy or _revive_busy
 	if _light_tween != null and _light_tween.is_valid():
 		_light_tween.kill()
 	_light_tween = create_tween().set_parallel(true)
-	_light_tween.tween_property(_vision_cone, ^"energy", 0.3 if value else 1.3, 0.35)
-	_light_tween.tween_property(_glow, ^"energy", 0.25 if value else 0.7, 0.35)
+	_light_tween.tween_property(_vision_cone, ^"energy", 0.3 if busy else 1.3, 0.35)
+	_light_tween.tween_property(_glow, ^"energy", 0.25 if busy else 0.7, 0.35)
 
 
 func add_latcher(delta_count: int) -> void:
@@ -259,11 +287,76 @@ func set_dead(value: bool) -> void:
 	visible = not value
 	set_deferred(&"collision_layer", 0 if value else 2)
 	if value:
+		downed = false  # death overrides downed
+		_reviving = false
+		_body.modulate = Color.WHITE
 		set_searching(false)
+		set_reviver_busy(false)
 		_cancel_cast()
 		latched_count = 0
+		queue_redraw()
 		if is_multiplayer_authority():
-			print("[combat] you died — respawning shortly")
+			print("[combat] you died")
+
+
+## DOWNED is not dead: the pawn stays visible and collidable, crawls, can't act,
+## and bleeds out unless a teammate revives it (host-owned timers).
+func set_downed(value: bool, elapsed_ms: int = 0) -> void:
+	if downed == value:
+		return
+	downed = value
+	if value:
+		_cancel_cast()
+		set_searching(false)
+		set_reviver_busy(false)
+		_charm_left = 0.0
+		_charm_source = ""
+		_dodge_time_left = 0.0
+		latched_count = 0
+		_reviving = false
+		# elapsed_ms back-dates the bar for a late joiner (host's true bleed time).
+		_downed_since_ms = Time.get_ticks_msec() - elapsed_ms
+		_body.modulate = Color(1.5, 0.5, 0.55)  # bleeding-out tint
+	else:
+		_reviving = false
+		_body.modulate = Color.WHITE
+		# Back on your feet — a breath of i-frames so you aren't instantly redowned.
+		_spawn_grace_left = SPAWN_GRACE
+	queue_redraw()
+
+
+## A teammate's revive cast is running on us (host-synced on/off) — show its bar.
+func set_reviving(value: bool, elapsed_ms: int = 0) -> void:
+	_reviving = value
+	if value:
+		_revive_since_ms = Time.get_ticks_msec() - elapsed_ms
+	queue_redraw()
+
+
+func _process(_delta: float) -> void:
+	if downed:
+		queue_redraw()  # animate the bleed-out / revive bar
+
+
+func _draw() -> void:
+	if not downed:
+		return
+	# Counter-rotate so the bar stays upright above the head as the pawn turns.
+	draw_set_transform(Vector2.ZERO, -rotation, Vector2.ONE)
+	var width: float = 46.0
+	var origin := Vector2(-width * 0.5, -48.0)
+	draw_rect(Rect2(origin, Vector2(width, 6.0)), Color(0.05, 0.05, 0.05, 0.85))
+	var frac: float
+	var fill: Color
+	if _reviving:
+		frac = clampf(float(Time.get_ticks_msec() - _revive_since_ms)
+				/ (GameWorld.REVIVE_TIME * 1000.0), 0.0, 1.0)
+		fill = Color(0.4, 0.95, 0.5)
+	else:
+		frac = clampf(1.0 - float(Time.get_ticks_msec() - _downed_since_ms)
+				/ (GameWorld.BLEED_OUT * 1000.0), 0.0, 1.0)
+		fill = Color(0.95, 0.35, 0.35)
+	draw_rect(Rect2(origin + Vector2(1.0, 1.0), Vector2((width - 2.0) * frac, 4.0)), fill)
 
 
 func respawn_to_slot() -> void:
@@ -341,6 +434,14 @@ func _apply_movement(input: Dictionary, delta: float) -> void:
 	var aim: Vector2 = input["aim"]
 	if aim.length_squared() > 4.0:
 		_last_aim = aim.normalized()
+	if downed:
+		# A slow drag — no dodge, no sprint, no recoil/charm/suction physics.
+		velocity = move.normalized() * (move_speed * 0.3) if move != Vector2.ZERO else Vector2.ZERO
+		_running = false
+		move_and_slide()
+		if aim.length_squared() > 4.0:
+			rotation = aim.angle()
+		return
 	if input["dodge"] and _dodge_cooldown_left == 0.0 and _stamina >= dodge_stamina_cost:
 		_stamina -= dodge_stamina_cost  # the dash bill is paid in stamina now
 		_stamina_delay = STAMINA_REGEN_DELAY
@@ -362,7 +463,7 @@ func _apply_movement(input: Dictionary, delta: float) -> void:
 		_running = false
 	else:
 		var speed: float = move_speed
-		var busy: bool = _cast_kind != CastKind.NONE or _searching
+		var busy: bool = _cast_kind != CastKind.NONE or _search_busy or _revive_busy
 		# Sprint: shift + stamina + actually moving + hands free.
 		var wants_run: bool = input["sprint"] and move != Vector2.ZERO \
 				and _stamina > 0.0 and not busy
@@ -465,7 +566,7 @@ func _cancel_cast() -> void:
 
 
 func _try_start_reload() -> void:
-	if _cast_kind != CastKind.NONE or _searching or _world == null or _reload_pending:
+	if _cast_kind != CastKind.NONE or _search_busy or _revive_busy or _world == null or _reload_pending:
 		return
 	var mag_idx: int = GameWorld.mag_index_for(equipped_gun)
 	if mag_idx < 0:
@@ -494,7 +595,7 @@ func _handle_fire(input: Dictionary, delta: float) -> void:
 				_world._request_pickup.rpc_id(1, item.loot_id)
 			_fire_cooldown_left = maxf(_fire_cooldown_left, 0.15)
 			return
-	if _cast_kind != CastKind.NONE or _searching:
+	if _cast_kind != CastKind.NONE or _search_busy or _revive_busy:
 		return
 	if _charm_left > 0.0:
 		return  # too busy swooning to shoot
@@ -544,9 +645,19 @@ func _handle_fire(input: Dictionary, delta: float) -> void:
 
 
 func _handle_interact(input: Dictionary) -> void:
-	if _world == null or not input["interact"]:
+	if _world == null or not input["interact"] or downed:
 		return
 	if _cast_kind != CastKind.NONE:
+		return
+	# A downed teammate takes priority over containers: one E starts the revive,
+	# which the host runs as a ~4s cast that cancels if you walk off.
+	var fallen: Player = _nearest_downed_teammate()
+	if fallen != null:
+		var target_id: int = str(fallen.name).to_int()
+		if multiplayer.is_server():
+			_world.host_request_revive(1, target_id)
+		else:
+			_world._request_revive.rpc_id(1, target_id)
 		return
 	# Lockers AND corpses share the search interface (duck-typed group).
 	var nearest: Node2D = null
@@ -573,6 +684,20 @@ func _find_charm_source() -> Node2D:
 		if node is Node2D and String(node.name) == _charm_source and node.visible:
 			return node as Node2D
 	return null
+
+
+func _nearest_downed_teammate() -> Player:
+	var nearest: Player = null
+	var nearest_dist: float = GameWorld.REVIVE_RANGE
+	for node: Node in get_tree().get_nodes_in_group(&"players"):
+		var pawn := node as Player
+		if pawn == null or pawn == self or not pawn.downed:
+			continue
+		var dist: float = pawn.global_position.distance_to(global_position)
+		if dist <= nearest_dist:
+			nearest_dist = dist
+			nearest = pawn
+	return nearest
 
 
 func _hovered_loot_in_range() -> LootItem:

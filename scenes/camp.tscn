@@ -1,0 +1,65 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/camp.gd" id="1_camp"]
+
+[node name="Camp" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+script = ExtResource("1_camp")
+
+[node name="Center" type="CenterContainer" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+
+[node name="Column" type="VBoxContainer" parent="Center"]
+layout_mode = 2
+theme_override_constants/separation = 14
+
+[node name="Title" type="Label" parent="Center/Column"]
+layout_mode = 2
+text = "CAMP — pack your loadout, then deploy"
+horizontal_alignment = 1
+
+[node name="Hint" type="Label" parent="Center/Column"]
+layout_mode = 2
+text = "Bring gear from your stash. Extract to bank what survives — die and it stays on your corpse."
+horizontal_alignment = 1
+
+[node name="Cols" type="HBoxContainer" parent="Center/Column"]
+layout_mode = 2
+theme_override_constants/separation = 40
+
+[node name="StashCol" type="VBoxContainer" parent="Center/Column/Cols"]
+layout_mode = 2
+
+[node name="StashHeader" type="Label" parent="Center/Column/Cols/StashCol"]
+layout_mode = 2
+text = "STASH"
+
+[node name="StashList" type="VBoxContainer" parent="Center/Column/Cols/StashCol"]
+custom_minimum_size = Vector2(300, 240)
+layout_mode = 2
+
+[node name="LoadoutCol" type="VBoxContainer" parent="Center/Column/Cols"]
+layout_mode = 2
+
+[node name="LoadoutHeader" type="Label" parent="Center/Column/Cols/LoadoutCol"]
+layout_mode = 2
+text = "LOADOUT — bringing in"
+
+[node name="LoadoutList" type="VBoxContainer" parent="Center/Column/Cols/LoadoutCol"]
+custom_minimum_size = Vector2(300, 240)
+layout_mode = 2
+
+[node name="Deploy" type="Button" parent="Center/Column"]
+layout_mode = 2
+text = "DEPLOY ▶"
+
+[node name="Status" type="Label" parent="Center/Column"]
+layout_mode = 2
+text = ""
+horizontal_alignment = 1

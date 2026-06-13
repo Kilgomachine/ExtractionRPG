@@ -2,7 +2,9 @@ extends Control
 ## Entry point: host/join over Steam (friends, zero config) or ENet (local
 ## dev testing — two editor instances, or LAN by IP).
 
-const WORLD_SCENE: String = "res://scenes/world.tscn"
+# Camp sits between the menu and the raid: pick a loadout from your stash, then
+# Deploy. Each peer visits its own Camp once its transport is up.
+const CAMP_SCENE: String = "res://scenes/camp.tscn"
 
 @onready var _steam_label: Label = $Center/Column/SteamLabel
 @onready var _name_edit: LineEdit = $Center/Column/NameEdit
@@ -48,9 +50,9 @@ func _on_host_steam_pressed() -> void:
 func _on_steam_session_ready() -> void:
 	if multiplayer.is_server():
 		print("[menu] hosting via Steam")
-		get_tree().change_scene_to_file(WORLD_SCENE)
+		get_tree().change_scene_to_file(CAMP_SCENE)
 	else:
-		# Client transport is up; world entry happens on connected_to_server.
+		# Client transport is up; camp entry happens on connected_to_server.
 		_status.text = "Connecting to your friend's raid…"
 
 
@@ -65,7 +67,7 @@ func _on_host_pressed() -> void:
 		_status.text = "Couldn't host — is another host already running? (error %d)" % err
 		return
 	print("[menu] hosting on port %d" % Game.DEFAULT_PORT)
-	get_tree().change_scene_to_file(WORLD_SCENE)
+	get_tree().change_scene_to_file(CAMP_SCENE)
 
 
 func _on_join_pressed() -> void:
@@ -83,7 +85,7 @@ func _on_join_pressed() -> void:
 
 func _on_connected() -> void:
 	print("[menu] connected to host")
-	get_tree().change_scene_to_file(WORLD_SCENE)
+	get_tree().change_scene_to_file(CAMP_SCENE)
 
 
 func _on_connection_failed() -> void:

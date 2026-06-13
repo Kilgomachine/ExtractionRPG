@@ -81,7 +81,9 @@ func _physics_process(delta: float) -> void:
 	if _tick_left > 0.0:
 		return
 	_tick_left = tick_interval
-	for pawn: Player in _world.alive_pawns():
+	# vulnerable_pawns(), not alive_pawns(): a downed body still burns (the hit
+	# routes into its bleed-out clock host-side).
+	for pawn: Player in _world.vulnerable_pawns():
 		if _covers(pawn.global_position):
 			_world.host_damage_player(str(pawn.name).to_int(), tick_damage, 0, true)  # pierces shields
 

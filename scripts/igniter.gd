@@ -168,7 +168,7 @@ func _run_ai(delta: float) -> void:
 		State.CHASE:
 			_acquire_delay_left = maxf(0.0, _acquire_delay_left - delta)
 			var target: Player = _world.pawn_for(_target_id)
-			if target == null or target.dead:
+			if target == null or target.dead or target.downed:
 				_target_id = 0
 				_enter(State.IDLE)
 				return
@@ -191,7 +191,7 @@ func _run_ai(delta: float) -> void:
 			# Tracks you during the charge (limited turn rate) — commit your
 			# sidestep LATE, not the moment the cast starts.
 			var tracked: Player = _world.pawn_for(_target_id)
-			if tracked != null and not tracked.dead:
+			if tracked != null and not tracked.dead and not tracked.downed:
 				var desired: float = (tracked.global_position - global_position).angle()
 				rotation = rotate_toward(rotation, desired, 1.4 * delta)
 			if _state_time >= cast_time:

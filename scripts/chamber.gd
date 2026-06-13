@@ -153,7 +153,7 @@ func _run_ai(delta: float) -> void:
 		State.CHASE:
 			_acquire_delay_left = maxf(0.0, _acquire_delay_left - delta)
 			var target: Player = _world.pawn_for(_target_id)
-			if target == null or target.dead:
+			if target == null or target.dead or target.downed:
 				_target_id = 0
 				_enter(State.IDLE)
 				return
@@ -191,7 +191,7 @@ func _run_ai(delta: float) -> void:
 func _raise_walls() -> void:
 	var target: Player = _world.pawn_for(_target_id)
 	_ring_center = global_position
-	if target != null and not target.dead:
+	if target != null and not target.dead and not target.downed:
 		_ring_center = (global_position + target.global_position) * 0.5
 	# Spare ring segments that would crush someone standing there.
 	var mask: int = 0

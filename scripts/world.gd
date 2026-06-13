@@ -15,6 +15,18 @@ const HEAL_INTERVAL_MS: int = 500
 const TEAM_SIGHT_RANGE: float = 500.0
 const HEARING_RANGE: float = 380.0
 
+# --- Raid Zero loop tuning (knobs — expect to tune these from playtests) -------
+const RAID_DURATION: float = 600.0   # 10 minutes; at 0 everyone still in dies
+const BLEED_OUT: float = 30.0        # downed -> death if not revived in time
+const REVIVE_TIME: float = 4.0       # teammate must hold the revive this long
+const REVIVE_HP: int = 40            # health you come back with
+const REVIVE_RANGE: float = 80.0     # how close a reviver must be
+# Anti-flood clamps on the (untrusted, friend-trust) camp kit — a modified
+# client can't mint 999-of-everything into world state or the stash. Generous
+# enough for any legit loadout; a true ledger needs a host-side stash (backlog).
+const LOADOUT_ITEM_CAP: int = 50     # per-type
+const LOADOUT_TOTAL_CAP: int = 200   # total items
+
 # Item types (indices into a loadout counts array).
 const ITEM_SCRAP: int = 0
 const ITEM_MEDKIT: int = 1
@@ -144,12 +156,25 @@ var _stats: Dictionary[int, PackedInt32Array] = {}  # kills, dmg, pkills, deaths
 var _names: Dictionary[int, String] = {}
 var _fire_ready_at: Dictionary[int, int] = {}
 var _heal_ready_at: Dictionary[int, int] = {}
+# Downed / revive (host-owned). A downed player is NOT dead: they crawl, can't
+# shoot, bleed out, and enemies ignore them. A teammate's E revives them.
+var _downed: Dictionary[int, bool] = {}
+var _bleed_left: Dictionary[int, float] = {}
+var _revive_by: Dictionary[int, int] = {}        # downed id -> reviver id
+var _revive_progress: Dictionary[int, float] = {}
+var _last_damager: Dictionary[int, int] = {}     # for PK credit at true death
+# Raid timer (host-owned, global). Counts down once; at 0, everyone still in
+# the raid dies. Broadcast on whole-second changes only (no per-frame spam).
+var _raid_time_left: float = 0.0
+var _raid_running: bool = false
+var _raid_last_sec: int = -1
 var _next_projectile: int = 0
 var _next_loot: int = 0
 var _next_fire_zone: int = 0
 var _next_grenade: int = 0
 var _next_smoke: int = 0
 var _hear_left: float = 0.4
+var _join_attempts: int = 0
 var _local_pawn: Player
 
 @onready var _players: Node2D = $Players
@@ -181,7 +206,6 @@ func _ready() -> void:
 	dash_check.toggled.connect(func(on: bool) -> void: Game.set_dash_to_mouse(on))
 	($Hud/Console/Box/Input as LineEdit).text_submitted.connect(_on_console_submitted)
 	($Hud/DeathPanel/Col/LeaveDead as Button).pressed.connect(_leave_to_menu)
-	($Hud/DeathPanel/Col/RespawnDead as Button).pressed.connect(_ui_respawn)
 	($Hud/ExtractPanel/Col/BackExtract as Button).pressed.connect(_leave_to_menu)
 	($Hud/ExtractPanel/Col/Note as Label).visible = true
 	for skill: int in 3:
@@ -189,6 +213,8 @@ func _ready() -> void:
 		btn.pressed.connect(_ui_spend_point.bind(skill))
 	if multiplayer.is_server():
 		multiplayer.peer_disconnected.connect(_on_peer_disconnected)
+		_raid_time_left = RAID_DURATION
+		_raid_running = true
 		_slots[1] = 0
 		_local_spawn(1, 0)
 		_spawned_ids.append(1)
@@ -196,11 +222,20 @@ func _ready() -> void:
 		_player_hp[1] = Player.MAX_HEALTH
 		_stats[1] = PackedInt32Array([0, 0, 0, 0])
 		_sync_player_hp.rpc(1, Player.MAX_HEALTH)
-		_init_loadout(1)
+		_apply_deploy_loadout(1)
 		host_set_name(1, Game.display_name())
+		update_raid_timer(int(ceil(_raid_time_left)))
 	else:
-		_request_join.rpc_id(1)
-		_register_name.rpc_id(1, Game.display_name())
+		# The host enters the raid first, but if this client deploys before the
+		# host's world exists, the join RPC lands on nothing. Retry until spawned.
+		_join_attempts = 0
+		_send_join_request()
+		var retry := Timer.new()
+		retry.name = "JoinRetry"
+		retry.wait_time = 0.75
+		add_child(retry)
+		retry.timeout.connect(_join_retry)
+		retry.start()
 
 
 func _process(_delta: float) -> void:
@@ -223,12 +258,15 @@ func _physics_process(delta: float) -> void:
 	for id: int in _player_shield:
 		_shield_delay[id] = maxf(0.0, float(_shield_delay.get(id, 0.0)) - delta)
 		if _shield_delay[id] == 0.0 and _player_shield[id] < float(SHIELD_MAX) \
-				and _player_hp.get(id, 0) > 0:
+				and _player_hp.get(id, 0) > 0 and not bool(_downed.get(id, false)):
 			_player_shield[id] = minf(float(SHIELD_MAX), _player_shield[id] + SHIELD_REGEN * delta)
 			var whole: int = int(_player_shield[id])
 			var pawn := pawn_for(id)
 			if pawn != null and whole != pawn._displayed_shield:
 				_sync_shield.rpc(id, whole)
+	_tick_raid_timer(delta)
+	_tick_downed(delta)
+	_tick_revives(delta)
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -261,7 +299,7 @@ func _on_console_submitted(text: String) -> void:
 	var cmd: String = parts[0].to_lower()
 	match cmd:
 		"help":
-			out.text = "give <type 0-11> <n> · heal · xp <n> · die · respawn · extract · killenemies"
+			out.text = "give <type 0-11> <n> · heal · xp <n> · die · extract · killenemies"
 		"give":
 			if parts.size() >= 3 and _loadouts.has(1):
 				_loadouts[1][clampi(int(parts[1]), 0, ITEM_TYPES - 1)] += int(parts[2])
@@ -278,9 +316,6 @@ func _on_console_submitted(text: String) -> void:
 		"die":
 			host_damage_player(1, 9999, 0, true)
 			out.text = "oof"
-		"respawn":
-			host_respawn_player(1)
-			out.text = "back in"
 		"extract":
 			host_extract_player(1)
 			out.text = "gone"
@@ -303,7 +338,23 @@ func pawn_for(id: int) -> Player:
 	return _players.get_node_or_null(str(id)) as Player
 
 
+## Pawns that are live targets: not dead and NOT downed. Enemies, AoE, hearing
+## and the extraction zone all read this — so a downed player is ignored by
+## enemies and cannot extract, without ever setting the `dead` flag.
 func alive_pawns() -> Array[Player]:
+	var result: Array[Player] = []
+	for child: Node in _players.get_children():
+		var pawn := child as Player
+		if pawn != null and not pawn.dead and not pawn.downed:
+			result.append(pawn)
+	return result
+
+
+## Pawns that environmental HAZARDS can hurt: not dead, INCLUDING downed. Fire
+## and frag use this so a downed body is no safe hiding spot — hazard damage
+## eats the bleed-out clock (see host_damage_player). Enemy AI still uses
+## alive_pawns(), so enemies keep ignoring the downed.
+func vulnerable_pawns() -> Array[Player]:
 	var result: Array[Player] = []
 	for child: Node in _players.get_children():
 		var pawn := child as Player
@@ -378,12 +429,43 @@ func host_alert_enemies(origin: Vector2, focus: Vector2, radius: float) -> void:
 
 # --- join / leave ----------------------------------------------------------------
 
+## Client: send the join handshake (name + camp-chosen kit). Re-sent by the
+## retry timer until our pawn appears, so a deploy that races ahead of the
+## host's world still lands once the host is in the raid.
+func _send_join_request() -> void:
+	_register_name.rpc_id(1, Game.display_name())
+	_request_join.rpc_id(1, Game.chosen_loadout, Game.chosen_equipped)
+
+
+func _join_retry() -> void:
+	if multiplayer.is_server():
+		return
+	var retry := get_node_or_null("JoinRetry") as Timer
+	if pawn_for(multiplayer.get_unique_id()) != null:
+		if retry != null:
+			retry.queue_free()  # joined — stop retrying
+		return
+	_join_attempts += 1
+	if _join_attempts > 16:  # ~12s of trying; give up rather than spam forever
+		if retry != null:
+			retry.queue_free()
+		print("[world] join timed out — host never came up; returning to menu")
+		_leave_to_menu()  # don't strand the player (or CI) in an empty world; re-banks the kit
+		return
+	_send_join_request()
+
+
 @rpc("any_peer", "call_remote", "reliable")
-func _request_join() -> void:
+func _request_join(kit: PackedInt32Array, equipped: int) -> void:
 	if not multiplayer.is_server():
 		return
 	var new_id: int = multiplayer.get_remote_sender_id()
 	if new_id in _spawned_ids:
+		return
+	if not _raid_running:
+		# The clock already hit 0 — the extraction window is closed. Don't spawn
+		# a live pawn into a finished raid; bounce them back to the menu.
+		_raid_closed.rpc_id(new_id)
 		return
 	for existing_id: int in _spawned_ids:
 		_spawn.rpc_id(new_id, existing_id, _slots[existing_id])
@@ -398,7 +480,22 @@ func _request_join() -> void:
 	_player_hp[new_id] = Player.MAX_HEALTH
 	_stats[new_id] = PackedInt32Array([0, 0, 0, 0])
 	_sync_player_hp.rpc(new_id, Player.MAX_HEALTH)
-	_init_loadout(new_id)
+	# Untrusted client kit: _apply_loadout sanitizes it. Empty => default kit.
+	if kit.is_empty():
+		_apply_loadout(new_id, _default_loadout_counts(), ITEM_RIFLE)
+	else:
+		_apply_loadout(new_id, kit, equipped)
+	# Late-join replay: the countdown and any downed teammates (with TRUE elapsed
+	# time so the bleed/revive bars don't restart from full on the joiner).
+	_sync_raid_time.rpc_id(new_id, int(ceil(_raid_time_left)))
+	for down_id: int in _downed:
+		if bool(_downed[down_id]):
+			var bleed_elapsed: int = int((BLEED_OUT - float(_bleed_left.get(down_id, BLEED_OUT))) * 1000.0)
+			_sync_downed.rpc_id(new_id, down_id, true, bleed_elapsed)
+			if int(_revive_by.get(down_id, 0)) != 0:
+				var rev_elapsed: int = int(float(_revive_progress.get(down_id, 0.0)) * 1000.0)
+				_sync_reviving.rpc_id(new_id, down_id, true, rev_elapsed)
+				_sync_reviver_busy.rpc_id(new_id, int(_revive_by[down_id]), true)
 	for existing_id: int in _spawned_ids:
 		if existing_id != new_id:
 			_sync_player_hp.rpc_id(new_id, existing_id, _player_hp[existing_id])
@@ -406,6 +503,16 @@ func _request_join() -> void:
 			_sync_shield.rpc_id(new_id, existing_id, int(_player_shield.get(existing_id, 0.0)))
 			_sync_xp.rpc_id(new_id, existing_id, int(_xp.get(existing_id, 0)),
 					int(_level.get(existing_id, 1)), int(_skill_points.get(existing_id, 0)))
+			# Existing teammates' loadouts were broadcast before this peer joined
+			# — replay so the joiner has correct host-truth (equipped gun, ammo).
+			if _loadouts.has(existing_id):
+				_sync_loadout.rpc_id(new_id, existing_id, _loadouts[existing_id],
+						_mags.get(existing_id, PackedInt32Array([0, 0, 0])),
+						int(_equipped.get(existing_id, -1)))
+			# A teammate who died (hp 0, not downed) renders as a fresh pawn on
+			# the joiner unless we replay the dead visual explicitly.
+			if _player_hp[existing_id] == 0 and not bool(_downed.get(existing_id, false)):
+				_sync_dead.rpc_id(new_id, existing_id, true)
 	for id: int in _names:
 		_sync_name.rpc_id(new_id, id, _names[id])
 	for child: Node in _enemies.get_children():
@@ -501,6 +608,13 @@ func _on_peer_disconnected(id: int) -> void:
 	_names.erase(id)
 	_fire_ready_at.erase(id)
 	_heal_ready_at.erase(id)
+	# XP teardown was missing — matches the rest of the per-peer cleanup. (NOT
+	# done on extract: an extracted peer stays in _world_ready_ids and may
+	# re-deploy, so its progression must persist there.)
+	_xp.erase(id)
+	_level.erase(id)
+	_skill_points.erase(id)
+	_clear_downed_state(id)
 	_despawn.rpc(id)
 	_local_despawn(id)
 	_broadcast_ready_peers()
@@ -517,6 +631,14 @@ func _on_server_disconnected() -> void:
 
 
 func _leave_to_menu() -> void:
+	# Left the raid alive without extracting or dying (menu Leave, host drop, or
+	# a join that never landed) — re-bank the kit so it isn't lost. No-op after
+	# extract/death (which already cleared it). Bank the CURRENT loadout (the
+	# pawn's host-synced _counts, net of drops/pickups) if we made it into the
+	# raid; otherwise the deploy snapshot (never spawned, e.g. join timeout).
+	if not Game.pending_kit.is_empty():
+		var pawn := local_pawn()
+		Game.settle_pending_kit(pawn._counts if pawn != null else Game.pending_kit)
 	Game.leave()
 	get_tree().change_scene_to_file(MENU_SCENE)
 
@@ -618,13 +740,6 @@ func refresh_bag(counts: PackedInt32Array, equipped: int) -> void:
 		list.add_child(row)
 
 
-func _ui_respawn() -> void:
-	if multiplayer.is_server():
-		host_respawn_player(1)
-	else:
-		_request_respawn.rpc_id(1)
-
-
 func _ui_spend_point(skill: int) -> void:
 	if _my_points <= 0:
 		return
@@ -653,12 +768,20 @@ func _ui_drop(item_type: int) -> void:
 ## The single place player damage is decided. source > 0 = another player (FF).
 ## pierce_shield: fire damage ignores shields entirely.
 func host_damage_player(id: int, amount: int, source: int = 0, pierce_shield: bool = false) -> void:
-	if not multiplayer.is_server() or not _player_hp.has(id) or _player_hp[id] <= 0:
+	if not multiplayer.is_server() or not _player_hp.has(id):
 		return
 	var pawn := pawn_for(id)
-	if pawn == null:
+	if pawn == null or pawn.is_invulnerable():
 		return
-	if pawn.is_invulnerable():
+	if bool(_downed.get(id, false)):
+		# A downed body still burns/bleeds from hazards (fire, frag) — crawling
+		# into fire is NOT a safe hiding spot. HP is already 0, so the damage
+		# eats the bleed-out clock instead, hastening (or causing) death.
+		_bleed_left[id] = float(_bleed_left.get(id, BLEED_OUT)) - float(amount)
+		if _bleed_left[id] <= 0.0:
+			_host_player_death(id)
+		return
+	if _player_hp[id] <= 0:
 		return
 	_shield_delay[id] = SHIELD_DELAY
 	if not pierce_shield:
@@ -670,24 +793,34 @@ func host_damage_player(id: int, amount: int, source: int = 0, pierce_shield: bo
 			_sync_shield.rpc(id, int(_player_shield[id]))
 		if amount <= 0:
 			return
+	if source > 0 and source != id:
+		_last_damager[id] = source  # remembered for PK credit at true death
 	_player_hp[id] = maxi(0, _player_hp[id] - amount)
 	_sync_player_hp.rpc(id, _player_hp[id])
 	if source > 0 and source != id and _stats.has(source):
 		_stats[source][1] += amount
 		_sync_stats.rpc(source, _stats[source])
 	if _player_hp[id] == 0:
-		if _stats.has(id):
-			_stats[id][3] += 1
-			_sync_stats.rpc(id, _stats[id])
-		if source > 0 and source != id and _stats.has(source):
-			_stats[source][2] += 1
-			_sync_stats.rpc(source, _stats[source])
-		_host_player_death(id)
+		# Not instant death anymore: drop them into DOWNED (unless solo, where
+		# no revive is possible). Death + kill credit happen in _host_player_death.
+		_enter_downed(id)
 
 
 ## PERMADEATH: your corpse keeps your bag; no respawn (harness excepted).
 func _host_player_death(id: int) -> void:
 	print("[combat] player %d died — gear stays on the corpse" % id)
+	_clear_downed_state(id)
+	_sync_dead.rpc(id, true)
+	# Death + PK credit happen HERE (not at the down event) so a revive never
+	# inflates the count. PK goes to whoever last damaged them, if a player.
+	if _stats.has(id):
+		_stats[id][3] += 1
+		_sync_stats.rpc(id, _stats[id])
+	var killer: int = int(_last_damager.get(id, 0))
+	if killer > 0 and killer != id and _stats.has(killer):
+		_stats[killer][2] += 1
+		_sync_stats.rpc(killer, _stats[killer])
+	_last_damager.erase(id)
 	var pawn := pawn_for(id)
 	if pawn != null and _loadouts.has(id):
 		_next_corpse += 1
@@ -708,6 +841,12 @@ func _host_player_death(id: int) -> void:
 		_show_death.rpc_id(id)
 	if Game.auto_walk:
 		_schedule_respawn(id)  # headless harness still cycles
+	# This death may have removed the last possible reviver — anyone now downed
+	# with nobody left to save them dies immediately rather than bleeding out
+	# hopelessly for 30s. (Snapshot keys; _host_player_death erases _downed.)
+	for down_id: int in _downed.keys():
+		if bool(_downed.get(down_id, false)) and not _has_potential_reviver(down_id):
+			_host_player_death(down_id)
 
 
 @rpc("authority", "call_local", "reliable")
@@ -724,15 +863,12 @@ func _show_death() -> void:
 
 func _show_death_local() -> void:
 	($Hud/DeathPanel as PanelContainer).visible = true
+	Game.clear_pending_kit()  # your kit is on the corpse now — fate settled (lost)
 
 
-## Console / harness escape hatch — DEAD players only (an alive client could
-## otherwise request a free full heal + kit + escape teleport).
-func host_respawn_player(id: int) -> void:
-	if multiplayer.is_server() and _player_hp.get(id, 1) <= 0:
-		_on_respawn_timer(id, null)
-
-
+## Headless-harness respawn cycle ONLY (Game.auto_walk). The human-facing
+## testing respawn was removed for Raid Zero — permadeath + downed/revive is the
+## real loop now. _host_player_death only schedules this when auto_walk is set.
 func _schedule_respawn(id: int) -> void:
 	var timer := Timer.new()
 	timer.one_shot = true
@@ -747,6 +883,7 @@ func _on_respawn_timer(id: int, timer: Timer) -> void:
 		timer.queue_free()
 	if not multiplayer.is_server() or not _player_hp.has(id) or pawn_for(id) == null:
 		return
+	_sync_dead.rpc(id, false)  # hp sync no longer un-deads; do it explicitly
 	_player_respawned.rpc(id)
 	_player_hp[id] = Player.MAX_HEALTH
 	_sync_player_hp.rpc(id, Player.MAX_HEALTH)
@@ -770,17 +907,27 @@ func _hide_death_local() -> void:
 
 ## Host-only, called by an ExtractionZone when a player's timer completes.
 func host_extract_player(id: int) -> void:
-	if not multiplayer.is_server() or not _loadouts.has(id):
-		return
+	if not multiplayer.is_server() or not _loadouts.has(id) or not _raid_running:
+		return  # no banking after the extraction window has closed
+	# Snapshot the haul BEFORE the erase below — this is the stash deposit.
+	var deposit: PackedInt32Array = _loadouts[id].duplicate()
 	var carried: int = 0
-	for n: int in _loadouts[id]:
+	for n: int in deposit:
 		carried += n
 	print("[raid] player %d EXTRACTED with %d items" % [id, carried])
+	# Bank it into the OWNING peer's per-client stash. The host writes its own
+	# user:// file directly; a remote extractor persists its own via this RPC
+	# (the host must never write another peer's stash file).
+	if id == 1:
+		Game.stash_add(deposit)
+	else:
+		_deposit_stash.rpc_id(id, deposit)
 	_extracted_fx.rpc(id, carried)
 	# Out of the raid: despawn the pawn and CLEAR combat state so a same-frame
 	# death can't mint a corpse of already-extracted items. The peer stays in
 	# _world_ready_ids — they're still rendering (and the HOST must keep
 	# receiving everyone's streams).
+	_clear_downed_state(id)
 	_spawned_ids.erase(id)
 	_player_hp.erase(id)
 	_player_shield.erase(id)
@@ -792,13 +939,211 @@ func host_extract_player(id: int) -> void:
 	_local_despawn(id)
 
 
+## Runs on the OWNING client: persist an extracted haul to this machine's stash.
+@rpc("authority", "call_remote", "reliable")
+func _deposit_stash(counts: PackedInt32Array) -> void:
+	Game.stash_add(counts)
+
+
+# --- downed / revive / raid timer ----------------------------------------------
+
+## Tick the raid clock (host). Broadcast on whole-second changes only. At 0,
+## everyone still in the raid (not extracted) dies.
+func _tick_raid_timer(delta: float) -> void:
+	if not _raid_running:
+		return
+	_raid_time_left = maxf(0.0, _raid_time_left - delta)
+	var sec: int = int(ceil(_raid_time_left))
+	if sec != _raid_last_sec:
+		_raid_last_sec = sec
+		_sync_raid_time.rpc(sec)
+	if _raid_time_left <= 0.0:
+		_raid_running = false
+		print("[raid] time up — the extraction window has closed")
+		for id: int in _spawned_ids.duplicate():
+			# Skip the already-dead (still in _spawned_ids) so we don't mint a
+			# second corpse; kill the living and the downed alike.
+			if _player_hp.get(id, 0) > 0 or bool(_downed.get(id, false)):
+				_last_damager.erase(id)  # the clock is nobody's player-kill
+				_host_player_death(id)
+
+
+@rpc("authority", "call_local", "reliable")
+func _sync_raid_time(seconds: int) -> void:
+	update_raid_timer(seconds)
+
+
+## Host told a would-be joiner the raid is already over — go back to the menu
+## (re-banking the kit they withdrew at camp; they never entered).
+@rpc("authority", "call_remote", "reliable")
+func _raid_closed() -> void:
+	print("[world] the raid was already over — returning to menu")
+	_leave_to_menu()
+
+
+func update_raid_timer(seconds: int) -> void:
+	var label := $Hud/RaidTimer as Label
+	if label == null:
+		return
+	label.text = "RAID OVER" if seconds <= 0 else "RAID  %d:%02d" % [seconds / 60, seconds % 60]
+
+
+## HP hit 0: go DOWNED instead of dying — unless nobody could revive (solo, or
+## everyone else is already down/dead), in which case it's just death.
+func _enter_downed(id: int) -> void:
+	if bool(_downed.get(id, false)):
+		return
+	if not _has_potential_reviver(id):
+		_host_player_death(id)
+		return
+	_downed[id] = true
+	_bleed_left[id] = BLEED_OUT
+	print("[combat] player %d is DOWNED — a teammate can revive them" % id)
+	_sync_downed.rpc(id, true, 0)
+
+
+## Is anyone alive (not this player, not dead, not downed) able to come revive?
+func _has_potential_reviver(id: int) -> bool:
+	for child: Node in _players.get_children():
+		var pawn := child as Player
+		if pawn == null or str(pawn.name).to_int() == id:
+			continue
+		if not pawn.dead and not pawn.downed:
+			return true
+	return false
+
+
+## Bleed-out (host): downed players lose the clock; at 0 they truly die.
+func _tick_downed(delta: float) -> void:
+	for id: int in _downed.keys():
+		if not bool(_downed[id]):
+			continue
+		_bleed_left[id] = float(_bleed_left.get(id, 0.0)) - delta
+		if _bleed_left[id] <= 0.0:
+			print("[combat] player %d bled out" % id)
+			_host_player_death(id)
+
+
+## A teammate's E reached a downed player — begin (or keep) the revive cast.
+func host_request_revive(reviver_id: int, target_id: int) -> void:
+	if not multiplayer.is_server() or not bool(_downed.get(target_id, false)):
+		return
+	var reviver := pawn_for(reviver_id)
+	var target := pawn_for(target_id)
+	if reviver == null or target == null or reviver.dead or reviver.downed:
+		return
+	if reviver.global_position.distance_to(target.global_position) > REVIVE_RANGE + 14.0:
+		return
+	# First reviver wins: a second teammate pressing E doesn't hijack or reset
+	# the cast (which would also orphan the first reviver's busy state).
+	if _revive_by.has(target_id):
+		return
+	_revive_by[target_id] = reviver_id
+	_revive_progress[target_id] = 0.0
+	# call_local RPC so the reviver's OWN client gets _revive_busy=true too —
+	# otherwise a remote reviver could sprint/fire/reload through the channel.
+	_sync_reviver_busy.rpc(reviver_id, true)
+	_sync_reviving.rpc(target_id, true, 0)
+
+
+@rpc("authority", "call_local", "reliable")
+func _sync_reviver_busy(reviver_id: int, on: bool) -> void:
+	var pawn := pawn_for(reviver_id)
+	if pawn != null:
+		pawn.set_reviver_busy(on)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func _request_revive(target_id: int) -> void:
+	if multiplayer.is_server():
+		host_request_revive(multiplayer.get_remote_sender_id(), target_id)
+
+
+## Advance in-progress revives (host); cancel if the reviver bails / dies / walks
+## off, or the target stops being downed. Complete -> back up at REVIVE_HP.
+func _tick_revives(delta: float) -> void:
+	for target_id: int in _revive_by.keys():
+		var reviver_id: int = int(_revive_by[target_id])
+		var reviver := pawn_for(reviver_id)
+		var target := pawn_for(target_id)
+		var valid: bool = bool(_downed.get(target_id, false)) \
+				and reviver != null and target != null \
+				and not reviver.dead and not reviver.downed \
+				and reviver.global_position.distance_to(target.global_position) <= REVIVE_RANGE + 14.0
+		if not valid:
+			_cancel_revive(target_id)
+			continue
+		_revive_progress[target_id] = float(_revive_progress.get(target_id, 0.0)) + delta
+		if _revive_progress[target_id] >= REVIVE_TIME:
+			_complete_revive(target_id, reviver_id)
+
+
+func _cancel_revive(target_id: int) -> void:
+	var reviver_id: int = int(_revive_by.get(target_id, 0))
+	if reviver_id != 0:
+		_sync_reviver_busy.rpc(reviver_id, false)
+	_revive_by.erase(target_id)
+	_revive_progress.erase(target_id)
+	if bool(_downed.get(target_id, false)):
+		_sync_reviving.rpc(target_id, false, 0)  # bar off, but still bleeding
+
+
+func _complete_revive(target_id: int, reviver_id: int) -> void:
+	_sync_reviver_busy.rpc(reviver_id, false)
+	_revive_by.erase(target_id)
+	_revive_progress.erase(target_id)
+	_downed[target_id] = false
+	_bleed_left.erase(target_id)
+	_last_damager.erase(target_id)
+	_player_hp[target_id] = REVIVE_HP
+	_player_shield[target_id] = 0.0
+	_shield_delay[target_id] = SHIELD_DELAY
+	_sync_player_hp.rpc(target_id, REVIVE_HP)
+	_sync_shield.rpc(target_id, 0)
+	_sync_downed.rpc(target_id, false, 0)  # pawn.set_downed(false) grants brief grace
+	print("[combat] player %d revived player %d" % [reviver_id, target_id])
+
+
+## Wipe ALL downed/revive bookkeeping for a player (death, extract, disconnect),
+## and cancel any revive THEY were performing on someone else.
+func _clear_downed_state(id: int) -> void:
+	# Free the reviver who was working on THIS player (now dead/extracted/gone).
+	if _revive_by.has(id):
+		_sync_reviver_busy.rpc(int(_revive_by[id]), false)
+	_downed.erase(id)
+	_bleed_left.erase(id)
+	_revive_by.erase(id)
+	_revive_progress.erase(id)
+	# If this player was reviving SOMEONE ELSE, cancel that too.
+	for other_id: int in _revive_by.keys():
+		if int(_revive_by[other_id]) == id:
+			_cancel_revive(other_id)
+
+
+@rpc("authority", "call_local", "reliable")
+func _sync_downed(id: int, on: bool, elapsed_ms: int = 0) -> void:
+	var pawn := pawn_for(id)
+	if pawn != null:
+		pawn.set_downed(on, elapsed_ms)
+	if id == multiplayer.get_unique_id():
+		($Hud/DownedPanel as PanelContainer).visible = on
+
+
+@rpc("authority", "call_local", "reliable")
+func _sync_reviving(id: int, on: bool, elapsed_ms: int = 0) -> void:
+	var pawn := pawn_for(id)
+	if pawn != null:
+		pawn.set_reviving(on, elapsed_ms)
+
+
 @rpc("authority", "call_local", "reliable")
 func _extracted_fx(id: int, carried: int) -> void:
 	Game.play_sfx("heal", Vector2.ZERO)
 	if id == multiplayer.get_unique_id():
+		Game.clear_pending_kit()  # survivors were just deposited — fate settled
 		var panel := $Hud/ExtractPanel as PanelContainer
 		($Hud/ExtractPanel/Col/Note as Label).text = \
-				"EXTRACTED!\nYou made it out with %d items.\n(Stash coming soon — for now, glory.)" % carried
+				"EXTRACTED!\nYou made it out with %d items.\nBanked in your stash — bring them back next raid." % carried
 		panel.visible = true
 
 
@@ -851,11 +1196,21 @@ func host_spend_point(id: int, skill: int) -> void:
 
 @rpc("authority", "call_local", "reliable")
 func _sync_player_hp(id: int, hp: int) -> void:
+	# HP 0 no longer implies dead — it may mean DOWNED. The dead/downed visual
+	# is driven explicitly by _sync_dead / _sync_downed instead.
 	var pawn := pawn_for(id)
 	if pawn == null:
 		return
 	pawn.update_displayed_health(hp)
-	pawn.set_dead(hp <= 0)
+
+
+@rpc("authority", "call_local", "reliable")
+func _sync_dead(id: int, value: bool) -> void:
+	var pawn := pawn_for(id)
+	if pawn != null:
+		pawn.set_dead(value)
+	if value and id == multiplayer.get_unique_id():
+		($Hud/DownedPanel as PanelContainer).visible = false  # dead > downed
 
 
 @rpc("authority", "call_local", "reliable")
@@ -874,7 +1229,9 @@ func _sync_shield(id: int, value: int) -> void:
 
 # --- loadout -------------------------------------------------------------------------
 
-func _init_loadout(id: int) -> void:
+## The default testing kit — used by the headless harness and as the fallback
+## when no camp loadout was chosen (empty Game.chosen_loadout).
+func _default_loadout_counts() -> PackedInt32Array:
 	var counts := PackedInt32Array()
 	counts.resize(ITEM_TYPES)
 	counts[ITEM_MEDKIT] = START_MEDKITS
@@ -882,18 +1239,61 @@ func _init_loadout(id: int) -> void:
 	counts[ITEM_FRAG] = 1
 	counts[ITEM_SMOKE] = 1
 	counts[ITEM_FLASH] = 1
-	# Testing kit: every weapon in the bag (equip via B).
 	counts[ITEM_RIFLE] = 1
 	counts[ITEM_SMG] = 1
 	counts[ITEM_SHOTGUN] = 1
 	counts[ITEM_LASER] = 1
+	return counts
+
+
+## CI / auto_walk respawn re-seeds the default kit.
+func _init_loadout(id: int) -> void:
+	_apply_loadout(id, _default_loadout_counts(), ITEM_RIFLE)
+
+
+## The host's own deploy: read the camp choice (or the default kit if none).
+func _apply_deploy_loadout(id: int) -> void:
+	if Game.chosen_loadout.is_empty():
+		_apply_loadout(id, _default_loadout_counts(), ITEM_RIFLE)
+	else:
+		_apply_loadout(id, Game.chosen_loadout, Game.chosen_equipped)
+
+
+## Seed a player's host-owned kit from (untrusted) counts: clamp to the item
+## domain, fill mags only for guns actually brought, validate the equipped gun.
+func _apply_loadout(id: int, raw_counts: PackedInt32Array, raw_equipped: int) -> void:
+	var counts := PackedInt32Array()
+	counts.resize(ITEM_TYPES)
+	var total: int = 0
+	for t: int in ITEM_TYPES:
+		var n: int = raw_counts[t] if t < raw_counts.size() else 0
+		# Per-type clamp, then a running total clamp — a modified client cannot
+		# flood world state / the stash with an absurd kit.
+		n = clampi(n, 0, mini(LOADOUT_ITEM_CAP, LOADOUT_TOTAL_CAP - total))
+		counts[t] = n
+		total += n
 	_loadouts[id] = counts
-	_mags[id] = PackedInt32Array([8, 24, 4])
-	_equipped[id] = ITEM_RIFLE
+	var mags := PackedInt32Array([0, 0, 0])
+	for g: int in [ITEM_RIFLE, ITEM_SMG, ITEM_SHOTGUN]:
+		if counts[g] > 0:
+			mags[mag_index_for(g)] = int(GUN_SPECS[g]["mag"])
+	_mags[id] = mags
+	_equipped[id] = _validate_equipped(counts, raw_equipped)
 	_player_shield[id] = float(SHIELD_MAX)
 	_shield_delay[id] = 0.0
 	_sync_shield.rpc(id, SHIELD_MAX)
 	_push_loadout(id)
+
+
+## Equipped must be a gun the player actually brought; else the first owned gun,
+## else none (-1, a naked run).
+func _validate_equipped(counts: PackedInt32Array, equipped: int) -> int:
+	if (GUN_SPECS.has(equipped) or equipped == ITEM_LASER) and counts[equipped] > 0:
+		return equipped
+	for g: int in [ITEM_RIFLE, ITEM_SMG, ITEM_SHOTGUN, ITEM_LASER]:
+		if counts[g] > 0:
+			return g
+	return -1
 
 
 func _push_loadout(id: int) -> void:
@@ -1095,6 +1495,8 @@ func host_projectile_hit(pid: int, target: Node, hostile: bool, dmg: int, shoote
 		var victim: int = str(pawn.name).to_int()
 		if not hostile and victim == shooter:
 			return false  # your own bullet doesn't bite you
+		if hostile and bool(_downed.get(victim, false)):
+			return false  # enemies ignore the downed — an in-flight round phases through
 		if pawn.is_invulnerable():
 			print("[combat] player %s phased through a shot" % pawn.name)
 			return false
@@ -1205,7 +1607,8 @@ func host_resolve_grenade(_gid: int, type: int, thrower: int, at: Vector2) -> vo
 						and (child as Node2D).global_position.distance_to(at) <= FRAG_RADIUS \
 						and blast_clear(at, (child as Node2D).global_position):
 					host_award_xp(thrower, int(child.call(&"host_take_damage", FRAG_DAMAGE, thrower)))
-			for victim: Player in alive_pawns():
+			# vulnerable_pawns(): a frag can finish a downed teammate/foe.
+			for victim: Player in vulnerable_pawns():
 				if victim.global_position.distance_to(at) <= FRAG_RADIUS \
 						and blast_clear(at, victim.global_position):
 					host_damage_player(str(victim.name).to_int(), FRAG_DAMAGE, thrower)
@@ -1307,12 +1710,6 @@ func _spawn_burst(fire_id: int, center: Vector2, safe_dir: float, radius: float,
 	zone.tick_damage = 4  # same flame as the Igniter's jet
 	_fires.add_child(zone)
 	Game.play_sfx("flame", center)
-
-
-@rpc("any_peer", "call_remote", "reliable")
-func _request_respawn() -> void:
-	if multiplayer.is_server():
-		host_respawn_player(multiplayer.get_remote_sender_id())
 
 
 @rpc("authority", "call_local", "reliable")
